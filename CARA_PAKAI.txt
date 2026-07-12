@@ -1,0 +1,44 @@
+=========================================================
+  APLIKASI DETEKSI ANOMALI HPP
+=========================================================
+
+--- A. CARA MEMBUAT FILE .EXE (dilakukan SEKALI, oleh yang paham) ---
+
+1. Pastikan Python terpasang (python.org, centang "Add to PATH" saat install).
+2. Taruh 3 file ini dalam 1 folder:
+      - DeteksiAnomaliHPP.py
+      - hpp_engine.py
+      - BUILD_bikin_exe.bat
+3. Dobel-klik  BUILD_bikin_exe.bat  lalu tunggu sampai selesai.
+4. File jadi ada di:  dist\DeteksiAnomaliHPP.exe
+5. Copy DeteksiAnomaliHPP.exe ke komputer yang mau dipakai.
+
+   Catatan: sebagian antivirus kadang salah curiga pada .exe hasil
+   PyInstaller. Kalau itu terjadi, jalankan build dengan mengganti
+   --onefile menjadi --onedir (hasilnya 1 folder, bukan 1 file).
+
+--- B. CARA MEMAKAI (untuk owner) ---
+
+1. Dobel-klik  DeteksiAnomaliHPP.exe
+2. "Folder database": arahkan ke lokasi JUAL.DBF (biasanya  Z:\ ).
+3. Isi Tanggal MULAI dan Tanggal SAMPAI (format HARI/BULAN/TAHUN).
+4. Klik  ANALISA ANOMALI  dan tunggu.
+5. Muncul ringkasan -> pilih "Ya" untuk membuka hasilnya di Excel.
+   File otomatis tersimpan di folder  Documents.
+
+--- C. MEMBACA HASIL EXCEL ---
+
+Anomali ditentukan bila selisih HPP > 30% (bisa diubah di aplikasi).
+
+Baris MERAH  = paling mencurigakan (tidak ada pembelian bulan itu,
+               tapi HPP tetap berbeda -> kemungkinan besar salah hitung).
+Baris KUNING = anomali lain (perlu dicek; bisa jadi ada pembelian baru).
+
+Kolom penting:
+  HPP_TAMPIL  = HPP yang muncul di aplikasi kasir
+  HPP_DOMINAN = HPP yang seharusnya (paling sering dipakai bulan itu)
+  DAMPAK_RL   = perkiraan nilai salah hitung laba (Rp)
+  NOFAKTUR    = nomor faktur JUAL yang perlu diperiksa di aplikasi
+
+Buka faktur-faktur dengan DAMPAK_RL terbesar lebih dulu.
+=========================================================

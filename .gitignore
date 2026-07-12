@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Claude local settings
+.claude/settings.local.json
