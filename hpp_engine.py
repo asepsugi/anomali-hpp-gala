@@ -1,183 +1,195 @@
 # -*- coding: utf-8 -*-
 """
-Engine deteksi anomali HPP - logika murni, tanpa GUI.
-Formula HPP diambil persis dari aplikasi VFP:
-    HPP_tampil = iif(isisatuan<>jumlah, hargabeli/isisatuan, hargabeli/jumlah)
+Engine deteksi anomali HPP (versi terkoreksi).
+
+Mekanisme (terbukti dari aplikasi + verifikasi layar):
+  HPP yang DITAMPILKAN aplikasi = HARGABELI / ISISATUAN  (bila ISISATUAN<>JUMLAH)
+                                = HARGABELI / JUMLAH      (bila sama)
+  -> nilai ini bisa SALAH bila HARGABELI tersimpan tidak konsisten
+     (kadang per-satuan, kadang total), terutama pada satuan bertingkat (PCS/LSN/DUS).
+
+Patokan "HPP yang benar":
+  harga pokok per satuan dasar (median historis per barang, tahan perubahan harga)
+  x faktor konversi satuan dari master STOK (ISISAT2/ISISAT3).
+  Faktor & harga master diambil dari STOK.DBF.
+
+Anomali = |HPP_layar - HPP_benar| / HPP_benar  melebihi ambang.
 """
 import os
 import numpy as np
 import pandas as pd
 from dbfread import DBF
 
+MIN_ROWS_MEDIAN = 3   # minimal transaksi barang agar median dipakai; kurang dari ini pakai master
+
 
 def _load_dbf(path):
-    tbl = DBF(path, ignore_missing_memofile=True, char_decode_errors='replace')
-    df = pd.DataFrame(iter(tbl))
+    df = pd.DataFrame(iter(DBF(path, ignore_missing_memofile=True, char_decode_errors='replace')))
     df.columns = [c.upper() for c in df.columns]
     return df
 
 
-def detect_anomalies(db_folder, date_from, date_to, tolerance=0.30, progress=None):
-    """
-    db_folder : folder berisi JUAL.DBF & BELI.DBF (mis. 'Z:\\')
-    date_from, date_to : pandas Timestamp / datetime
-    tolerance : ambang deviasi (0.02 = 2%)
-    progress : callable(str) opsional utk update status ke GUI
-    return : (anomali_df, ringkasan_dict)
-    """
-    def say(msg):
-        if progress:
-            progress(msg)
+def _build_master(stok):
+    """Kembalikan dict harga_pokok_dasar[kode] dan faktor[(kode,satuan)] dari STOK.DBF."""
+    basecost, factor = {}, {}
+    for _, r in stok.iterrows():
+        k = r['KODEBRG']
+        bc = np.nan
+        for c in ('HARGABELI', 'HARGARATA2'):
+            v = r.get(c)
+            if pd.notna(v) and v not in (0, 0.0):
+                bc = float(v); break
+        basecost[k] = bc
+        factor[(k, str(r.get('SATUAN', '')).strip())] = 1.0
+        for s, i in (('SATUAN2', 'ISISAT2'), ('SATUAN3', 'ISISAT3')):
+            su = str(r.get(s, '')).strip(); iv = r.get(i)
+            if su and su not in ('0', 'nan', 'None') and pd.notna(iv) and iv not in (0, 0.0):
+                factor[(k, su)] = float(iv)
+    return basecost, factor
+
+
+def detect_anomalies(db_folder, date_from, date_to, tolerance=0.50, progress=None):
+    """tolerance = ambang deviasi (0.50 = 50%). Kembalikan (anomali_df, ringkasan_dict)."""
+    def say(m):
+        if progress: progress(m)
 
     say("Membuka JUAL.DBF ...")
     jual = _load_dbf(os.path.join(db_folder, 'JUAL.DBF'))
     jual['TANGGAL'] = pd.to_datetime(jual['TANGGAL'], errors='coerce')
 
+    say("Membaca master STOK.DBF ...")
+    stok = _load_dbf(os.path.join(db_folder, 'STOK.DBF'))
+    basecost, factor = _build_master(stok)
+
     say("Menyaring periode ...")
     d = jual[(jual['TANGGAL'] >= date_from) & (jual['TANGGAL'] <= date_to)].copy()
-    # buang faktur retur (R) & transfer (T), samakan dgn report aslinya
     nf = d['NOFAKTUR'].astype(str).str.strip().str.upper()
     d = d[~nf.str.startswith(('R', 'T'))]
     if len(d) == 0:
-        return d, {'total_baris': 0, 'total_anomali': 0, 'periode': (date_from, date_to)}
+        return d, {'periode': (date_from, date_to), 'total_baris': 0, 'total_anomali': 0,
+                   'hampir_pasti': 0, 'satuan_tak_dikenal': 0}
 
-    say("Menghitung HPP (formula aplikasi) ...")
+    say("Menghitung HPP (seperti tampilan aplikasi) ...")
+    d['SATUAN'] = d['SATUAN'].astype(str).str.strip()
     isis = pd.to_numeric(d['ISISATUAN'], errors='coerce')
     juml = pd.to_numeric(d['JUMLAH'], errors='coerce')
     hb = pd.to_numeric(d['HARGABELI'], errors='coerce')
-    d['HPP_TAMPIL'] = np.where(isis != juml,
-                               np.where(isis != 0, hb / isis, np.nan),
-                               np.where(juml != 0, hb / juml, np.nan))
-    d['SATUAN'] = d['SATUAN'].astype(str).str.strip()
-    d['BULAN'] = d['TANGGAL'].dt.to_period('M')
-    d['HPP_R'] = d['HPP_TAMPIL'].round(0)
+    d['HPP_LAYAR'] = np.where(isis != juml,
+                              np.where(isis != 0, hb / isis, np.nan),
+                              np.where(juml != 0, hb / juml, np.nan))
+    d['FAKTOR'] = [factor.get((k, s), np.nan) for k, s in zip(d['KODEBRG'], d['SATUAN'])]
+    d['BASIS'] = d['HPP_LAYAR'] / d['FAKTOR']
 
-    say("Mencari nilai HPP dominan per barang/satuan/bulan ...")
-    grp = d.groupby(['KODEBRG', 'SATUAN', 'BULAN'])
-    dom = grp['HPP_R'].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else np.nan).rename('HPP_DOMINAN')
-    ndist = grp['HPP_R'].nunique().rename('N_NILAI_HPP')
-    d = d.merge(dom, on=['KODEBRG', 'SATUAN', 'BULAN']).merge(ndist, on=['KODEBRG', 'SATUAN', 'BULAN'])
+    say("Menentukan HPP yang benar (master x konversi) ...")
+    med = d.groupby('KODEBRG')['BASIS'].transform('median')
+    cnt = d.groupby('KODEBRG')['BASIS'].transform('count')
+    master_arr = pd.Series([basecost.get(k, np.nan) for k in d['KODEBRG']], index=d.index)
+    d['REF_DASAR'] = np.where(cnt >= MIN_ROWS_MEDIAN, med, master_arr)
+    d['HPP_BENAR'] = (d['REF_DASAR'] * d['FAKTOR']).round(0)
+    d['HPP_LAYAR'] = d['HPP_LAYAR'].round(0)
+    d['DEV_PCT'] = np.where(d['HPP_BENAR'] > 0,
+                            ((d['HPP_LAYAR'] - d['HPP_BENAR']).abs() / d['HPP_BENAR'] * 100).round(1),
+                            np.nan)
+    d['RASIO'] = np.where(d['HPP_BENAR'] > 0, (d['HPP_LAYAR'] / d['HPP_BENAR']).round(2), np.nan)
+    qty_jual = np.where(d['FAKTOR'] > 0, juml / d['FAKTOR'], juml)
+    d['DAMPAK_RL'] = ((d['HPP_BENAR'] - d['HPP_LAYAR']) * qty_jual).round(0)
 
-    dev = np.where(d['HPP_DOMINAN'] > 0,
-                   (d['HPP_R'] - d['HPP_DOMINAN']).abs() / d['HPP_DOMINAN'], np.nan)
-    d['DEV_PCT'] = (dev * 100).round(1)
+    # Klasifikasi sebab: apakah angka pokok sebenarnya masih bisa dipulihkan dari data,
+    # atau memang harga pokoknya salah.
+    ref = d['REF_DASAR']
+    tol_match = 0.15
+    def _close(x):
+        return (ref > 0) & x.notna() & ((x - ref).abs() / ref <= tol_match)
+    juml_safe = juml.replace(0, np.nan)
+    c_total = _close(hb / juml_safe)      # HARGABELI = total utk JUMLAH -> total benar, satuan salah
+    c_base = _close(hb)                   # HARGABELI = harga pokok dasar tapi di baris satuan tinggi
+    c_sell = _close(hb / d['FAKTOR'])     # HARGABELI = per satuan jual
+    d['SEBAB'] = np.where(c_total, 'TOTAL BENAR (satuan salah)',
+                   np.where(c_base | c_sell, 'NILAI POKOK BENAR (salah baris satuan)',
+                            'HARGA POKOK SALAH'))
 
-    # anomali: menyimpang > toleransi ATAU HPP tidak wajar (<=0), DAN memang ada >1 nilai HPP di grup itu
-    anom = d[((dev > tolerance) | (d['HPP_R'] <= 0)) & (d['N_NILAI_HPP'] > 1)].copy()
+    known = d['FAKTOR'].notna() & (d['HPP_BENAR'] > 0)
+    anom = d[known & (d['DEV_PCT'] > tolerance * 100)].copy()
+    anom['KEYAKINAN'] = np.where(anom['DEV_PCT'] > 90, 'HAMPIR PASTI',
+                          np.where(anom['DEV_PCT'] > 70, 'TINGGI', 'SEDANG'))
+    tak_dikenal = int((~d['FAKTOR'].notna()).sum())
 
-    say("Mengecek pembelian ke supplier ...")
-    try:
-        beli = _load_dbf(os.path.join(db_folder, 'BELI.DBF'))
-        beli['TANGGAL'] = pd.to_datetime(beli['TANGGAL'], errors='coerce')
-        beli['BULAN'] = beli['TANGGAL'].dt.to_period('M')
-        beli_set = set(zip(beli['KODEBRG'].astype(str), beli['BULAN'].astype(str)))
-        anom['ADA_BELI_BLN_INI'] = [
-            (str(k), str(b)) in beli_set for k, b in zip(anom['KODEBRG'], anom['BULAN'])
-        ]
-    except Exception as e:
-        anom['ADA_BELI_BLN_INI'] = None
-
-    anom['DAMPAK_RL'] = ((anom['HPP_DOMINAN'] - anom['HPP_R']) * pd.to_numeric(anom['ISISATUAN'], errors='coerce')).round(0)
-    anom['BULAN'] = anom['BULAN'].astype(str)
-    anom = anom.sort_values('TANGGAL')
-
-    has_ganti = 'GANTI' in anom.columns
-    has_user = 'NAMAUSER' in anom.columns
-    cols = ['TANGGAL', 'NOFAKTUR', 'KODEBRG', 'NAMABRG', 'SATUAN', 'JUMLAH', 'ISISATUAN',
-            'HARGABELI', 'HPP_TAMPIL', 'HPP_DOMINAN', 'DEV_PCT', 'HARGAJUAL', 'DAMPAK_RL']
-    if has_ganti:
-        cols.append('GANTI')
-    cols.append('ADA_BELI_BLN_INI')
-    if has_user:
-        cols.append('NAMAUSER')
+    cols = ['TANGGAL', 'NOFAKTUR', 'KODEBRG', 'NAMABRG', 'SATUAN', 'JUMLAH',
+            'HPP_LAYAR', 'HPP_BENAR', 'DEV_PCT', 'RASIO', 'HARGAJUAL', 'DAMPAK_RL', 'KEYAKINAN', 'SEBAB']
+    if 'GANTI' in anom.columns: cols.append('GANTI')
+    if 'NAMAUSER' in anom.columns: cols.append('NAMAUSER')
     cols = [c for c in cols if c in anom.columns]
-    anom_out = anom[cols].copy()
-    anom_out['HPP_TAMPIL'] = anom_out['HPP_TAMPIL'].round(0)
+    anom = anom.sort_values('TANGGAL')[cols]
 
-    ringkasan = {
+    ring = {
         'periode': (date_from, date_to),
-        'total_baris': int(len(d)),
-        'total_anomali': int(len(anom_out)),
-        'tanpa_pembelian': int((anom_out.get('ADA_BELI_BLN_INI') == False).sum()) if 'ADA_BELI_BLN_INI' in anom_out else 0,
-        'per_bulan': anom_out.groupby('BULAN' if 'BULAN' in anom_out else anom['BULAN']).size() if len(anom_out) else None,
+        'total_baris': int(known.sum()),
+        'total_anomali': int(len(anom)),
+        'hampir_pasti': int((anom['KEYAKINAN'] == 'HAMPIR PASTI').sum()) if len(anom) else 0,
+        'harga_pokok_salah': int((anom['SEBAB'] == 'HARGA POKOK SALAH').sum()) if len(anom) else 0,
+        'satuan_tak_dikenal': tak_dikenal,
     }
-    return anom_out, ringkasan
+    return anom, ring
 
 
 def write_report(anom, ringkasan, out_path):
-    """Tulis hasil ke Excel berformat. Baris paling mencurigakan (tanpa pembelian) di-highlight."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-
-    # --- Sheet Ringkasan ---
-    ws = wb.active
-    ws.title = "Ringkasan"
+    wb = Workbook(); ws = wb.active; ws.title = "Ringkasan"
     df, dt = ringkasan['periode']
-    judul = [
-        ("LAPORAN DETEKSI ANOMALI HPP", True),
-        (f"Periode: {df:%d/%m/%Y} s/d {dt:%d/%m/%Y}", False),
-        ("", False),
-        (f"Total baris penjualan diperiksa : {ringkasan['total_baris']:,}", False),
-        (f"Total baris ANOMALI ditemukan   : {ringkasan['total_anomali']:,}", False),
-        (f"  -> paling mencurigakan (tanpa pembelian bulan itu): {ringkasan['tanpa_pembelian']:,}", False),
-        ("", False),
-        ("Cara baca:", True),
-        ("HPP_TAMPIL  = nilai HPP yang MUNCUL di aplikasi (hasil hitung).", False),
-        ("HPP_DOMINAN = nilai HPP yang paling sering / dianggap benar bulan itu.", False),
-        ("DEV_PCT     = seberapa jauh menyimpang (%).", False),
-        ("DAMPAK_RL   = perkiraan salah hitung laba baris ini (Rp).", False),
-        ("ADA_BELI_BLN_INI = FALSE artinya tidak ada pembelian barang itu bulan tsb", False),
-        ("                   (HPP harusnya tetap) -> paling kuat indikasi salah hitung.", False),
-        ("GANTI = TRUE artinya HPP baris ini pernah diubah manual (tombol Ganti HPP).", False),
+    lines = [
+        ("LAPORAN DETEKSI ANOMALI HPP", 12),
+        (f"Periode: {df:%Y-%m-%d} s/d {dt:%Y-%m-%d}", 0),
+        ("", 0),
+        (f"Baris penjualan diperiksa : {ringkasan['total_baris']:,}", 0),
+        (f"Anomali ditemukan          : {ringkasan['total_anomali']:,}", 0),
+        (f"  - HAMPIR PASTI (dev >90%): {ringkasan['hampir_pasti']:,}", 0),
+        (f"  - HARGA POKOK SALAH (perlu koreksi angka): {ringkasan.get('harga_pokok_salah',0):,}", 0),
+        (f"Baris satuan tak terdaftar di master (dicek terpisah): {ringkasan['satuan_tak_dikenal']:,}", 0),
+        ("", 0),
+        ("Cara baca:", 11),
+        ("HPP_LAYAR = HPP yang MUNCUL di laporan aplikasi.", 0),
+        ("HPP_BENAR = HPP seharusnya (harga pokok master x konversi satuan).", 0),
+        ("RASIO     = HPP_LAYAR / HPP_BENAR. Dekat kelipatan bulat (mis. 12; 0,08)", 0),
+        ("            menandakan salah konversi satuan.", 0),
+        ("DAMPAK_RL = perkiraan salah hitung laba baris ini (Rp) - KASAR, jgn jadi nominal rugi.", 0),
+        ("KEYAKINAN = HAMPIR PASTI / TINGGI / SEDANG.", 0),
+        ("SEBAB     = TOTAL BENAR (satuan salah)  -> biaya benar, ISISATUAN salah.", 0),
+        ("            NILAI POKOK BENAR (salah baris satuan) -> angka pokok ada, salah satuan.", 0),
+        ("            HARGA POKOK SALAH -> biaya pokok beneran salah, PERLU koreksi angka.", 0),
     ]
-    for i, (txt, bold) in enumerate(judul, 1):
-        c = ws.cell(row=i, column=1, value=txt)
-        if bold:
-            c.font = Font(bold=True, size=12 if i == 1 else 11)
-    ws.column_dimensions['A'].width = 75
+    for i, (t, sz) in enumerate(lines, 1):
+        c = ws.cell(row=i, column=1, value=t)
+        if sz: c.font = Font(bold=True, size=sz)
+    ws.column_dimensions['A'].width = 78
 
-    # --- Sheet Anomali ---
     ws2 = wb.create_sheet("Anomali")
     if len(anom) == 0:
-        ws2.cell(row=1, column=1, value="Tidak ada anomali pada periode ini.")
+        ws2.cell(row=1, column=1, value="Tidak ada anomali pada periode & ambang ini.")
     else:
-        # urutkan berdasar dampak terbesar
         a = anom.reindex(anom['DAMPAK_RL'].abs().sort_values(ascending=False).index).reset_index(drop=True)
-        headers = list(a.columns)
-        head_fill = PatternFill("solid", fgColor="1F4E78")
-        head_font = Font(bold=True, color="FFFFFF")
-        thin = Side(style="thin", color="D0D0D0")
-        border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        for j, h in enumerate(headers, 1):
-            c = ws2.cell(row=1, column=j, value=h)
-            c.fill = head_fill; c.font = head_font
-            c.alignment = Alignment(horizontal="center"); c.border = border
-        red = PatternFill("solid", fgColor="FFC7CE")     # tanpa pembelian = paling mencurigakan
-        yellow = PatternFill("solid", fgColor="FFEB9C")   # anomali lain
-        has_beli = 'ADA_BELI_BLN_INI' in headers
-        beli_idx = headers.index('ADA_BELI_BLN_INI') if has_beli else -1
+        heads = list(a.columns)
+        hf = PatternFill("solid", fgColor="1F4E78"); hfont = Font(bold=True, color="FFFFFF")
+        thin = Side(style="thin", color="D0D0D0"); bd = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for j, h in enumerate(heads, 1):
+            c = ws2.cell(row=1, column=j, value=h); c.fill = hf; c.font = hfont
+            c.alignment = Alignment(horizontal="center"); c.border = bd
+        red = PatternFill("solid", fgColor="FFC7CE"); org = PatternFill("solid", fgColor="FFD9A0"); yel = PatternFill("solid", fgColor="FFF2CC")
+        ki = heads.index('KEYAKINAN') if 'KEYAKINAN' in heads else -1
         for i, row in enumerate(a.itertuples(index=False), start=2):
             vals = list(row)
-            highlight = red if (has_beli and vals[beli_idx] == False) else yellow
+            fill = yel
+            if ki >= 0:
+                fill = {'HAMPIR PASTI': red, 'TINGGI': org, 'SEDANG': yel}.get(vals[ki], yel)
             for j, v in enumerate(vals, 1):
-                if hasattr(v, 'strftime'):
-                    v = v.strftime('%d/%m/%Y')
-                elif isinstance(v, float):
-                    v = round(v, 2)
-                c = ws2.cell(row=i, column=j, value=v)
-                c.fill = highlight; c.border = border
-        # lebar kolom
-        widths = {'TANGGAL': 12, 'NOFAKTUR': 13, 'KODEBRG': 9, 'NAMABRG': 34, 'SATUAN': 8,
-                  'JUMLAH': 9, 'ISISATUAN': 10, 'HARGABELI': 12, 'HPP_TAMPIL': 12,
-                  'HPP_DOMINAN': 12, 'DEV_PCT': 9, 'HARGAJUAL': 11, 'DAMPAK_RL': 13,
-                  'GANTI': 8, 'ADA_BELI_BLN_INI': 16, 'NAMAUSER': 12}
-        for j, h in enumerate(headers, 1):
+                if hasattr(v, 'strftime'): v = v.strftime('%Y-%m-%d')
+                elif isinstance(v, float): v = round(v, 2)
+                c = ws2.cell(row=i, column=j, value=v); c.fill = fill; c.border = bd
+        widths = {'TANGGAL':12,'NOFAKTUR':13,'KODEBRG':9,'NAMABRG':34,'SATUAN':7,'JUMLAH':8,
+                  'HPP_LAYAR':11,'HPP_BENAR':11,'DEV_PCT':8,'RASIO':7,'HARGAJUAL':11,'DAMPAK_RL':13,'KEYAKINAN':13,'SEBAB':34,'GANTI':7,'NAMAUSER':11}
+        for j, h in enumerate(heads, 1):
             ws2.column_dimensions[get_column_letter(j)].width = widths.get(h, 12)
-        ws2.freeze_panes = "A2"
-        ws2.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(a)+1}"
-
+        ws2.freeze_panes = "A2"; ws2.auto_filter.ref = f"A1:{get_column_letter(len(heads))}{len(a)+1}"
     wb.save(out_path)
     return out_path

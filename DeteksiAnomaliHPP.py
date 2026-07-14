@@ -71,9 +71,9 @@ class App:
 
         # Sensitivitas
         tk.Label(frm, text="Ambang anomali (selisih HPP minimal):", anchor="w").grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        self.tol_var = tk.StringVar(value="30%  (disarankan)")
+        self.tol_var = tk.StringVar(value="50%  (disarankan)")
         self.tol_combo = ttk.Combobox(frm, textvariable=self.tol_var, state="readonly", width=22,
-                                       values=["15%  (lebih teliti)", "20%", "30%  (disarankan)", "50%  (paling parah saja)"])
+                                       values=["30%  (lebih teliti, banyak noise)", "50%  (disarankan)", "70%  (paling parah saja)", "90%  (hampir pasti bug)"])
         self.tol_combo.grid(row=6, column=0, sticky="w")
 
         frm.columnconfigure(0, weight=1)
@@ -115,7 +115,7 @@ class App:
         if d1 > d2:
             messagebox.showerror("Tanggal salah", "Tanggal MULAI tidak boleh setelah tanggal SAMPAI.")
             return
-        tol = {"15": 0.15, "20": 0.20, "30": 0.30, "50": 0.50}[self.tol_var.get().split("%")[0].strip()]
+        tol = {"30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}[self.tol_var.get().split("%")[0].strip()]
 
         self.btn.config(state="disabled")
         self.bar.start(12)
@@ -149,9 +149,11 @@ class App:
                     self.btn.config(state="normal")
                     self.status.config(text=f"Selesai. {ring['total_anomali']:,} anomali ditemukan.")
                     msg = (f"Analisa selesai.\n\n"
-                           f"Baris penjualan diperiksa : {ring['total_baris']:,}\n"
-                           f"Anomali ditemukan          : {ring['total_anomali']:,}\n"
-                           f"Paling mencurigakan        : {ring['tanpa_pembelian']:,}\n\n"
+                           f"Baris penjualan diperiksa   : {ring['total_baris']:,}\n"
+                           f"Anomali ditemukan            : {ring['total_anomali']:,}\n"
+                           f"  - HAMPIR PASTI (dev >90%)  : {ring.get('hampir_pasti', 0):,}\n"
+                           f"  - HARGA POKOK SALAH        : {ring.get('harga_pokok_salah', 0):,}\n"
+                           f"Satuan tak terdaftar (dicek terpisah): {ring.get('satuan_tak_dikenal', 0):,}\n\n"
                            f"File disimpan di:\n{out}\n\nBuka sekarang?")
                     if messagebox.askyesno("Selesai", msg):
                         try:
