@@ -32,8 +32,9 @@ Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
      (Folder database yang terakhir dipakai otomatis tersimpan, tidak perlu
       pilih ulang tiap buka aplikasi.)
   5. Pilih ambang (default sudah disarankan). Klik ANALISA.
-  6. Hasil tersimpan di folder Documents dan otomatis terbuka.
-     Nama file dibedakan: Anomali_HPP_... atau Anomali_Satuan_...
+  6. Hasil tersimpan di sub-folder "output" (sejajar aplikasi/skrip) dan
+     otomatis terbuka. Nama file dibedakan: Anomali_HPP_... atau Anomali_Satuan_...
+     (Untuk .exe: folder output ada di sebelah DeteksiAnomali.exe.)
 
 =========================================================
   C1. MEMBACA HASIL - ANOMALI HPP

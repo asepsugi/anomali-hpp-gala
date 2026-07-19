@@ -9,6 +9,7 @@ Dua jenis cek dalam satu aplikasi:
   2. SATUAN -> DeteksiAnomaliSatuan.detect_unit_errors (salah pilih satuan saat input)
 """
 import os
+import sys
 import json
 import threading
 import queue
@@ -28,6 +29,13 @@ except Exception:
 
 APP_TITLE = "Deteksi Anomali - SERBA INDAH"
 DEFAULT_FOLDER = "Z:\\"
+
+# Folder tempat program berjalan: untuk .exe = folder .exe, untuk .py = folder skrip
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".deteksi_anomali.json")
 
 
@@ -209,14 +217,14 @@ class App:
     def _worker(self, mode, folder, d1, d2, tol):
         try:
             stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-            docs = os.path.join(os.path.expanduser("~"), "Documents")
-            os.makedirs(docs, exist_ok=True)
+            out_dir = os.path.join(BASE_DIR, "output")
+            os.makedirs(out_dir, exist_ok=True)
             if mode == "HPP":
                 anom, ring = hpp_engine.detect_anomalies(
                     folder, pd.Timestamp(d1), pd.Timestamp(d2), tolerance=tol,
                     progress=self.set_status)
                 self.set_status("Menulis file Excel ...")
-                out = os.path.join(docs, f"Anomali_HPP_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
+                out = os.path.join(out_dir, f"Anomali_HPP_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
                 hpp_engine.write_report(anom, ring, out)
                 self.q.put(("done_hpp", (out, ring)))
             else:
@@ -224,7 +232,7 @@ class App:
                     folder, pd.Timestamp(d1), pd.Timestamp(d2), dev_threshold=tol,
                     progress=self.set_status)
                 self.set_status("Menulis file Excel ...")
-                out = os.path.join(docs, f"Anomali_Satuan_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
+                out = os.path.join(out_dir, f"Anomali_Satuan_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
                 satuan_engine.write_report(res, ring, out)
                 self.q.put(("done_satuan", (out, ring)))
         except Exception as e:
