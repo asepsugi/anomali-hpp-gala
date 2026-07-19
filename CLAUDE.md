@@ -89,6 +89,14 @@ HPP yang BENAR = harga pokok master x faktor konversi satuan.
 - Anomali bila DEV_PCT > ambang (default 50%). KEYAKINAN: >90% HAMPIR PASTI, >70% TINGGI.
 - SEBAB: TOTAL BENAR (HARGABELI/JUMLAH~ref) / NILAI POKOK BENAR (HARGABELI~ref) /
   HARGA POKOK SALAH (tak cocok -> perlu koreksi angka; ini prioritas audit).
+- GUARD konsistensi kuantitas (penting): satuan jual menyiratkan jumlah dasar =
+  ISISATUAN x FAKTOR. Bila JUMLAH tercatat LEBIH KECIL dari itu (undercount, mis. 1 BALL
+  faktor 25 tapi JUMLAH=1, HARGABELI 3.600), maka HARGABELI/JUMLAH cocok ref HANYA gara-
+  gara JUMLAH-nya salah -> jangan dicap "TOTAL BENAR", paksa ke HARGA POKOK SALAH (biaya
+  understated, perlu koreksi). JUMLAH lebih BESAR dari tersirat = label satuan salah tapi
+  jumlah dasar benar -> tetap boleh TOTAL BENAR. Contoh terbukti: faktur 2602-001094
+  (LABEL KOALA 103 POLOS, BALL, JUMLAH=1) semula salah dicap TOTAL BENAR, kini HARGA
+  POKOK SALAH. Lawannya 2601-000810 (BUSSINES FILE, PCS, JUMLAH=24) tetap TOTAL BENAR.
 - DAMPAK_RL = KASAR, hanya untuk urutan prioritas (bukan nominal rugi).
 - Zona 30-50% didominasi variasi harga wajar; makanya default 50%, bukan 30%.
 

@@ -101,9 +101,18 @@ def detect_anomalies(db_folder, date_from, date_to, tolerance=0.50, progress=Non
     def _close(x):
         return (ref > 0) & x.notna() & ((x - ref).abs() / ref <= tol_match)
     juml_safe = juml.replace(0, np.nan)
-    c_total = _close(hb / juml_safe)      # HARGABELI = total utk JUMLAH -> total benar, satuan salah
-    c_base = _close(hb)                   # HARGABELI = harga pokok dasar tapi di baris satuan tinggi
-    c_sell = _close(hb / d['FAKTOR'])     # HARGABELI = per satuan jual
+    # Konsistensi kuantitas: satuan jual menyiratkan jumlah dasar = ISISATUAN x FAKTOR.
+    # Bila JUMLAH tercatat LEBIH KECIL dari itu (mis. BALL faktor 25 tapi JUMLAH=1),
+    # biaya pokok understated: HARGABELI/JUMLAH cocok ref hanya gara-gara JUMLAH-nya salah.
+    # Baris seperti ini PERLU koreksi HPP, jadi jangan dicap "biaya benar".
+    # (JUMLAH lebih BESAR dari tersirat = label satuan salah tapi jumlah dasar benar -> tetap
+    #  boleh "TOTAL BENAR"; kalau biayanya beneran salah pun akan jatuh ke HARGA POKOK SALAH.)
+    exp_juml = isis * d['FAKTOR']
+    undercount = d['FAKTOR'].notna() & (exp_juml > 0) & (juml < exp_juml * 0.98 - 0.5)
+    qty_ok = ~undercount
+    c_total = qty_ok & _close(hb / juml_safe)  # HARGABELI = total utk JUMLAH -> total benar, satuan salah
+    c_base = qty_ok & _close(hb)               # HARGABELI = harga pokok dasar tapi di baris satuan tinggi
+    c_sell = qty_ok & _close(hb / d['FAKTOR'])  # HARGABELI = per satuan jual
     d['SEBAB'] = np.where(c_total, 'TOTAL BENAR (satuan salah)',
                    np.where(c_base | c_sell, 'NILAI POKOK BENAR (salah baris satuan)',
                             'HARGA POKOK SALAH'))
@@ -158,6 +167,9 @@ def write_report(anom, ringkasan, out_path):
         ("SEBAB     = TOTAL BENAR (satuan salah)  -> biaya benar, ISISATUAN salah.", 0),
         ("            NILAI POKOK BENAR (salah baris satuan) -> angka pokok ada, salah satuan.", 0),
         ("            HARGA POKOK SALAH -> biaya pokok beneran salah, PERLU koreksi angka.", 0),
+        ("", 0),
+        (">> Sheet 'Anomali' diurut: HARGA POKOK SALAH (perlu koreksi) di ATAS,", 0),
+        ("   teks SEBAB-nya MERAH TEBAL. Dalam tiap grup, diurut paling menyimpang (DEV_PCT).", 0),
     ]
     for i, (t, sz) in enumerate(lines, 1):
         c = ws.cell(row=i, column=1, value=t)
@@ -168,7 +180,14 @@ def write_report(anom, ringkasan, out_path):
     if len(anom) == 0:
         ws2.cell(row=1, column=1, value="Tidak ada anomali pada periode & ambang ini.")
     else:
-        a = anom.reindex(anom['DAMPAK_RL'].abs().sort_values(ascending=False).index).reset_index(drop=True)
+        # Urutan: HARGA POKOK SALAH (perlu koreksi) di atas, lalu paling menyimpang (DEV_PCT).
+        # DEV_PCT dipilih, bukan DAMPAK_RL, karena baris JUMLAH-salah punya DAMPAK_RL kecil
+        # (semu) sehingga kalau diurut dampak malah tenggelam.
+        prio = (anom['SEBAB'] != 'HARGA POKOK SALAH').astype(int) if 'SEBAB' in anom.columns else 0
+        dev = anom['DEV_PCT'] if 'DEV_PCT' in anom.columns else anom['DAMPAK_RL'].abs()
+        a = (anom.assign(_p=prio, _dev=dev)
+                 .sort_values(['_p', '_dev'], ascending=[True, False])
+                 .drop(columns=['_p', '_dev']).reset_index(drop=True))
         heads = list(a.columns)
         hf = PatternFill("solid", fgColor="1F4E78"); hfont = Font(bold=True, color="FFFFFF")
         thin = Side(style="thin", color="D0D0D0"); bd = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -176,16 +195,21 @@ def write_report(anom, ringkasan, out_path):
             c = ws2.cell(row=1, column=j, value=h); c.fill = hf; c.font = hfont
             c.alignment = Alignment(horizontal="center"); c.border = bd
         red = PatternFill("solid", fgColor="FFC7CE"); org = PatternFill("solid", fgColor="FFD9A0"); yel = PatternFill("solid", fgColor="FFF2CC")
+        hps_font = Font(bold=True, color="9C0006")   # penanda HARGA POKOK SALAH
         ki = heads.index('KEYAKINAN') if 'KEYAKINAN' in heads else -1
+        si = heads.index('SEBAB') if 'SEBAB' in heads else -1
         for i, row in enumerate(a.itertuples(index=False), start=2):
             vals = list(row)
             fill = yel
             if ki >= 0:
                 fill = {'HAMPIR PASTI': red, 'TINGGI': org, 'SEDANG': yel}.get(vals[ki], yel)
+            is_hps = (si >= 0 and vals[si] == 'HARGA POKOK SALAH')
             for j, v in enumerate(vals, 1):
                 if hasattr(v, 'strftime'): v = v.strftime('%Y-%m-%d')
                 elif isinstance(v, float): v = round(v, 2)
                 c = ws2.cell(row=i, column=j, value=v); c.fill = fill; c.border = bd
+                if is_hps and (j - 1) == si:
+                    c.font = hps_font
         widths = {'TANGGAL':12,'NOFAKTUR':13,'KODEBRG':9,'NAMABRG':34,'SATUAN':7,'JUMLAH':8,
                   'HPP_LAYAR':11,'HPP_BENAR':11,'DEV_PCT':8,'RASIO':7,'HARGAJUAL':11,'DAMPAK_RL':13,'KEYAKINAN':13,'SEBAB':34,'GANTI':7,'NAMAUSER':11}
         for j, h in enumerate(heads, 1):
