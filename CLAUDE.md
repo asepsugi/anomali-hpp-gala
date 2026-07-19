@@ -1,160 +1,164 @@
-# CLAUDE.md — Deteksi Anomali HPP (Toko SERBA INDAH)
+# CLAUDE.md — Audit Data Toko SERBA INDAH
 
-Panduan konteks untuk Claude / developer yang mengerjakan project ini. Baca dulu
-sebelum mengubah kode atau menafsirkan data. Banyak keputusan di sini adalah hasil
-investigasi yang sudah terbukti, termasuk beberapa kesimpulan yang SEMPAT SALAH lalu
-dikoreksi — bagian "Sejarah kesimpulan yang salah" ada supaya tidak diulang.
+Konteks untuk Claude Code / developer yang melanjutkan project ini. Baca dulu sebelum
+mengubah kode atau menafsirkan data. Banyak isi di sini hasil investigasi yang sudah
+terbukti dari data + string aplikasi, termasuk beberapa kesimpulan yang SEMPAT SALAH
+lalu dikoreksi (lihat "Sejarah kesimpulan yang salah") — jangan diulang.
 
-## Tujuan project
+> Catatan gabungan: dokumen ini hasil MERGE dua sesi Claude. Pemahaman data model +
+> engine dari sesi audit (folder `serba-indah-audit/`, kini terserap), dan GUI gabungan
+> + fitur aplikasi dari sesi Claude Code. Folder `serba-indah-audit/` dibiarkan sebagai
+> arsip pembanding; boleh dihapus bila sudah tidak perlu.
 
-Aplikasi terpisah (read-only) untuk mendeteksi baris penjualan yang HPP-nya salah
-tampil di laporan "Laba Penjualan" aplikasi kasir existing. BUKAN memodifikasi
-aplikasi kasirnya. Output: file Excel/CSV berisi daftar anomali untuk diaudit manual.
+## Tujuan
 
-Konteks orang:
-- Pemilik toko: non-teknis ("gaptek"). Butuh 1 file .exe yang tinggal dobel-klik.
-- Pengembang tool ini (user): membangun sendiri. Rencana rebuild aplikasi kasir
-  DITUNDA (owner tidak paham detail alur bisnis aplikasi jadinya).
+Kumpulan tool terpisah (read-only) untuk mengaudit data penjualan aplikasi kasir
+existing. Dua detektor sudah dibangun:
+1. Deteksi anomali HPP (harga pokok salah tampil di laporan Laba) — `hpp_engine.py`.
+2. Deteksi kesalahan input satuan (satuan jual salah pilih) — `DeteksiAnomaliSatuan.py`.
+
+BUKAN memodifikasi aplikasi kasir. Output: Excel/CSV daftar temuan untuk audit manual.
+
+Konteks orang: pemilik toko non-teknis (butuh .exe dobel-klik). Developer (user) membangun
+sendiri. Rencana rebuild aplikasi kasir DITUNDA (alur bisnis existing belum terpetakan).
 
 ## Sistem yang diaudit
 
-- Aplikasi kasir "SERBA INDAH", dibuat dengan Visual FoxPro 8 (lihat VFP8R.DLL,
-  VFP8T.DLL). EXE: `sip-new2023.exe`. Footer: `Copyright (c) 2014 - MIFTACHUDDIN`.
-- Data = file DBF/CDX (format FoxPro/dBase), di-share via Samba dari server Ubuntu,
-  ter-mapping sebagai drive `Z:` (`\\UBUNTU`) di komputer Windows.
-- VFP sudah end-of-life (Microsoft stop support 2015). DBF multi-user via network
-  rawan index corrupt (ada banyak file .BAK). JUAL.DBF ~93 MB (limit DBF 2 GB/tabel).
+Aplikasi kasir "SERBA INDAH", Visual FoxPro 8, EXE `sip-new2023.exe`,
+`Copyright (c) 2014 - MIFTACHUDDIN`. Data = file DBF/CDX, di-share Samba dari server
+Ubuntu, ter-mapping drive `Z:` (`\\UBUNTU`). VFP end-of-life; DBF multi-user rawan corrupt.
 
-### Batasan legal/etis
-EXE adalah milik developer lain (MIFTACHUDDIN). Membaca string/formula dari EXE untuk
-DIAGNOSIS itu wajar. JANGAN mendekompilasi penuh, memodifikasi, atau mendistribusikan
-ulang source-nya. Perbaikan permanen pada aplikasi kasir = domain developer aslinya.
+BATAS LEGAL: EXE milik developer lain. Membaca string/formula untuk diagnosis = wajar.
+JANGAN dekompilasi penuh / modifikasi / distribusi ulang source. Perbaikan aplikasi
+kasir = domain developer aslinya.
 
-## Tabel DBF yang relevan
+## Tabel & field penting (di ./data)
 
-- `JUAL.DBF` — baris penjualan (sumber utama). Field dipakai: TANGGAL, NOFAKTUR,
-  KODEBRG, NAMABRG, SATUAN, JUMLAH, ISISATUAN, HARGABELI, HARGAJUAL, GANTI, NAMAUSER.
-  Rentang data ~2009 s/d sekarang. Faktur diawali `R` = retur, `T` = transfer
-  (dikecualikan dari analisis).
-- `STOK.DBF` — master barang. Field penting: KODEBRG, NAMABRG, SATUAN (satuan dasar),
-  HARGABELI (harga pokok per satuan dasar, TERKINI), HARGARATA2, SATUAN2 + ISISAT2,
-  SATUAN3 + ISISAT3 (satuan ke-2/ke-3 + faktor konversi ke satuan dasar), NONSTOK.
-- `BELI.DBF` — pembelian ke supplier (KODESUPPL, KODEBRG, HARGABELI, TANGGAL, ...).
-- `masterbl.DBF` — harga beli per supplier. `masterjl.DBF` — harga jual per customer.
-- `kas.DBF`, `produksi.dbf`, `tranpiut.dbf` (piutang) — tidak dipakai tool ini.
+- `JUAL.DBF` — baris penjualan. Field: TANGGAL, NOFAKTUR, KODEBRG, NAMABRG, SATUAN,
+  JUMLAH, ISISATUAN, HARGABELI, HARGAJUAL, GANTI, NAMAUSER. Faktur diawali `R`/`T` =
+  retur/transfer (dikecualikan).
+- `STOK.DBF` — master (1 baris per barang, 721 barang). Field kunci:
+  - SATUAN (satuan dasar), ISISAT2/SATUAN2, ISISAT3/SATUAN3 (satuan ke-2/3 + faktor isi)
+  - HARGABELI, HARGARATA2 (harga pokok per satuan dasar, TERKINI)
+  - HARGAJUAL1/2/3 (harga JUAL per satuan tingkat 1/2/3, TERKINI)
+  - HRGKHS*/DISC* (harga khusus & diskon), TGLHARGA (tgl harga terakhir diubah)
+  - NONSTOK, SERVICE (penanda jasa/non-stok)
+- `BELI.DBF` — pembelian ke supplier (bertanggal).
+- `masterjl.DBF` — harga jual per-customer bertanggal (KODECUST, KODEBRG, HARGAJUAL,
+  TANGGAL). Ada beberapa baris per pasangan = semacam riwayat, tapi BERANTAKAN
+  (per-customer, satuan tercampur, tidak lengkap).
+- `masterbl.DBF` — harga beli per-supplier bertanggal.
+- `kas.DBF`, `produksi.dbf`, `tranpiut.dbf` (piutang) — belum dipakai.
 
-### Model data yang membingungkan (SUMBER BUG)
-`ISISATUAN` dan `JUMLAH` maknanya TIDAK konsisten antar-jalur input. Kadang
-ISISATUAN = JUMLAH (penjualan satuan dasar), kadang ISISATUAN = faktor/jumlah unit
-lain. `HARGABELI` di JUAL kadang berisi TOTAL, kadang PER-SATUAN. Inkonsistensi ini,
-terutama pada barang multi-satuan (PCS/LSN/DUS), adalah akar semua anomali HPP.
-Tombol "Ganti HPP" di layar laporan menimpa HARGABELI manual (menandai `GANTI=True`).
+### MODEL DATA JUMLAH vs ISISATUAN (penting, sudah diverifikasi 100%)
+- `JUMLAH`   = jumlah dalam SATUAN DASAR (mis. PCS).
+- `ISISATUAN`= jumlah dalam SATUAN JUAL (angka "Banyak" yang tampil di layar).
+- `JUMLAH / ISISATUAN` = faktor isi per satuan jual (selalu bilangan bulat).
+- Penjualan satuan dasar: `ISISATUAN == JUMLAH` (100% dari 113rb baris).
+- Contoh: 6 PAK @ 2 PCS  -> JUMLAH=12, ISISATUAN=6, SATUAN=PAK.
+Jadi kolom "JUMLAH" mentah = satuan dasar; untuk cocok dgn faktur pakai ISISATUAN.
+(Koreksi atas versi lama yang menyebut ISISATUAN/JUMLAH "tidak konsisten" — TIDAK, sudah
+terverifikasi konsisten seperti di atas.)
 
-## FAKTA KUNCI: cara aplikasi menghitung HPP di laporan Laba
+### NO price-history untuk harga master
+STOK hanya simpan harga TERKINI (+TGLHARGA). Tidak ada tabel riwayat perubahan harga
+jual/beli master. Riwayat terbaik = HARGAJUAL/HARGABELI di JUAL/BELI itu sendiri.
 
-HPP yang DITAMPILKAN di kolom laporan = operasi pada `JUAL.HARGABELI` per baris:
+## Cara aplikasi menghitung HPP di laporan Laba (FAKTA KUNCI)
 
-    HPP_LAYAR = IIF(ISISATUAN <> JUMLAH, HARGABELI/ISISATUAN, HARGABELI/JUMLAH)
-
-Terbukti: screenshot menampilkan HPP 13.699 untuk baris ISISATUAN=1 → 13699,63/1.
-Nilai ini BISA SALAH karena HARGABELI tersimpan tidak konsisten.
-
-HPP yang BENAR (seharusnya) = harga pokok master × faktor konversi satuan:
-
-    HPP_BENAR = REF_DASAR × FAKTOR(kode, satuan)
-
-FAKTOR: satuan dasar = 1; SATUAN2 → ISISAT2; SATUAN3 → ISISAT3 (dari STOK.DBF).
+HPP yang DITAMPILKAN = operasi pada JUAL.HARGABELI per baris:
+    HPP_LAYAR = IIF(ISISATUAN<>JUMLAH, HARGABELI/ISISATUAN, HARGABELI/JUMLAH)
+(Terbukti: layar menampilkan 13.699 = 13699,63/1.) Nilai ini BISA SALAH karena
+HARGABELI tersimpan tidak konsisten (kadang total, kadang per-satuan).
+HPP yang BENAR = harga pokok master x faktor konversi satuan.
 
 ### Sejarah kesimpulan yang salah (JANGAN diulang)
-1. Sempat pakai "HPP dominan = modus per (barang, satuan, bulan)". SALAH: pada sampel
-   kecil, modus memilih nilai rusak sebagai patokan sehingga baris BENAR ter-flag.
-   Ganti dengan REF_DASAR (lihat di bawah).
-2. Sempat menyimpulkan laporan menghitung HPP dari master (bukan HARGABELI). SALAH —
-   dipicu jawaban user yang keliru diingat. Screenshot membuktikan laporan pakai
-   HARGABELI mentah (HPP_LAYAR di atas). Master hanya dipakai sebagai PATOKAN BENAR,
-   bukan sumber tampilan.
+1. "HPP dominan = modus per (barang,satuan,bulan)" -> SALAH pada sampel kecil.
+2. "Laporan menghitung HPP dari master, bukan HARGABELI" -> SALAH; dipicu jawaban user
+   yang keliru. Screenshot membuktikan laporan pakai HARGABELI mentah.
+3. Detektor satuan versi lama membandingkan harga faktur dgn harga jual MASTER TERKINI
+   -> banyak false positive saat harga berubah. Sudah diganti dgn median riwayat (lihat
+   Detektor 2). File engine satuan lama (berbasis HARGAJUAL1/2/3) sudah TIDAK dipakai.
 
-## Metodologi deteksi (versi final & benar)
+## Detektor 1: anomali HPP (`hpp_engine.py :: detect_anomalies`)
+- HPP_LAYAR = formula aplikasi di atas.
+- FAKTOR dari master (dasar=1, SATUAN2->ISISAT2, SATUAN3->ISISAT3).
+- BASIS = HPP_LAYAR/FAKTOR. REF_DASAR = median BASIS per barang sepanjang periode
+  (>=3 baris) else harga pokok master. (Median dipilih agar tahan perubahan harga.)
+- HPP_BENAR = REF_DASAR x FAKTOR. DEV_PCT = |HPP_LAYAR-HPP_BENAR|/HPP_BENAR.
+- Anomali bila DEV_PCT > ambang (default 50%). KEYAKINAN: >90% HAMPIR PASTI, >70% TINGGI.
+- SEBAB: TOTAL BENAR (HARGABELI/JUMLAH~ref) / NILAI POKOK BENAR (HARGABELI~ref) /
+  HARGA POKOK SALAH (tak cocok -> perlu koreksi angka; ini prioritas audit).
+- DAMPAK_RL = KASAR, hanya untuk urutan prioritas (bukan nominal rugi).
+- Zona 30-50% didominasi variasi harga wajar; makanya default 50%, bukan 30%.
 
-Diimplementasikan di `hpp_engine.py :: detect_anomalies()`:
+## Detektor 2: kesalahan input satuan (`DeteksiAnomaliSatuan.py :: detect_unit_errors`)
+Versi TAHAN HARGA-USANG (median riwayat penjualan, bukan master). Signature & output
+kompatibel drop-in dengan GUI: `detect_unit_errors(db_folder, date_from, date_to,
+dev_threshold=0.60, match_tol=0.25, progress=None)` + `write_report(res, ring, out)`.
+- "Wajar/tidak untuk satuan yg diinput" -> median HARGAJUAL per (barang,satuan) dari
+  RIWAYAT PENJUALAN (JUAL), BUKAN harga master. -> tahan harga usang (mis. BATRE PAK
+  yang lazimnya 12.700 tidak lagi salah-tuduh walau master masih 6.500).
+- "Satuan yg seharusnya" -> struktur faktor isi (rasio antar-satuan stabil) x harga
+  satuan-dasar lazim.
+- Anomali bila HARGAJUAL menyimpang > ambang (default 60%) dari harga lazim satuan
+  diinput; kalau cocok satuan lain (match_tol 25%) -> SALAH SATUAN, kalau tidak ->
+  HARGA JANGGAL (cek manual). Output punya kolom DEV_PCT.
+- `MIN_HIST=2`: barang+satuan dengan <2 transaksi tidak dinilai (patokan tak layak).
+- Barang jasa/non-stok (ONGKOS, NONSTOK, SERVICE) dikecualikan.
+- Batas: andal utk faktor besar (PAK 250, RIM 500); rawan utk faktor kecil (PCS<->PAK
+  isi 2) karena perubahan harga ~2x mirip swap.
 
-1. Muat JUAL.DBF, saring periode, buang faktur R*/T*.
-2. `HPP_LAYAR` = formula aplikasi di atas.
-3. `FAKTOR` per baris dari master STOK. Baris dengan satuan TIDAK terdaftar di master
-   → FAKTOR NaN → TIDAK bisa diverifikasi → dikeluarkan dari daftar (dihitung terpisah).
-4. `BASIS` = HPP_LAYAR / FAKTOR (normalisasi ke satuan dasar).
-5. `REF_DASAR` = median BASIS per barang sepanjang periode (bila ≥3 baris), else
-   harga pokok master. MEDIAN dipilih karena tahan terhadap perubahan harga historis;
-   master HARGABELI adalah harga TERKINI (bisa meleset untuk transaksi lama).
-6. `HPP_BENAR` = REF_DASAR × FAKTOR. `DEV_PCT` = |HPP_LAYAR−HPP_BENAR|/HPP_BENAR×100.
-7. Anomali bila DEV_PCT > ambang (default 50%), FAKTOR diketahui, HPP_BENAR > 0.
-8. `KEYAKINAN`: >90% HAMPIR PASTI, >70% TINGGI, selain itu SEDANG.
-9. `RASIO` = HPP_LAYAR/HPP_BENAR. Dekat kelipatan bulat (12; 0,08; 0,5) = kuat indikasi
-   salah konversi satuan.
-10. `SEBAB` (klasifikasi, toleransi cocok 15% terhadap REF_DASAR):
-    - `TOTAL BENAR (satuan salah)` — HARGABELI/JUMLAH ≈ REF_DASAR. Biaya total benar,
-      hanya ISISATUAN salah. Tidak perlu koreksi angka.
-    - `NILAI POKOK BENAR (salah baris satuan)` — HARGABELI ≈ REF_DASAR atau
-      HARGABELI/FAKTOR ≈ REF_DASAR. Angka pokok benar, salah satuan. Tidak perlu koreksi.
-    - `HARGA POKOK SALAH` — tidak ada interpretasi yang cocok. INI yang perlu koreksi
-      angka manual. Prioritas audit.
-11. `DAMPAK_RL` = (HPP_BENAR − HPP_LAYAR) × (JUMLAH/FAKTOR). KASAR — untuk urutan
-    prioritas saja, BUKAN nominal rugi. Untuk kategori "TOTAL BENAR" / "NILAI POKOK
-    BENAR", dampak ke laba nyata ≈ 0 (uang tidak hilang, hanya laporan salah tampil).
+## Aplikasi GUI gabungan (`DeteksiAnomali.py`)
+Satu GUI, dua mode (radio button): "Anomali HPP" dan "Kesalahan Satuan". Mengimpor
+`hpp_engine` dan `DeteksiAnomaliSatuan` sebagai engine.
+- Pemilih folder database: default `Z:\`, tombol Pilih, validasi ada JUAL.DBF & STOK.DBF.
+- Folder terakhir DISIMPAN di `~/.deteksi_anomali.json` -> tak perlu pilih ulang.
+- Tanggal MULAI/SAMPAI pakai widget kalender `tkcalendar` (DateEntry); fallback ke
+  ketik-manual bila tkcalendar tak terpasang. Butuh `--hidden-import babel.numbers`
+  saat build PyInstaller.
+- Pilihan ambang berubah menurut mode: HPP = 0.1/30/50/70/90% (default 50%),
+  Satuan = 0.1/40/60/80% (default 60%).
+- Output Excel ke sub-folder `output/` di sebelah program (`sys.frozen` -> folder .exe,
+  else folder skrip), nama file `Anomali_HPP_...` / `Anomali_Satuan_...`, lalu dibuka.
 
-### Kalibrasi ambang
-Zona 30–50% didominasi VARIASI HARGA BELI yang wajar (RASIO ~1,3–1,45), BUKAN bug.
-Bug satuan asli menumpuk di >90% (RASIO kelipatan bulat). Karena itu default ambang
-= 50% (bukan 30%). Ambang di bawah 50% mulai memasukkan noise harga.
+## File project
+- `hpp_engine.py`, `DeteksiAnomaliSatuan.py` — engine murni (bisa diuji headless).
+- `DeteksiAnomali.py` — GUI tkinter GABUNGAN (HPP + Satuan). Ini yang dibuild jadi .exe.
+- `analisa.py` — CLI headless (lihat memory: `python3 analisa.py <mulai> <sampai> [ambang]`).
+- `BUILD_bikin_exe.bat`, `requirements.txt`, `CARA_PAKAI.txt`.
+- `data/` — salinan DBF untuk pengembangan (JANGAN tulis balik; ini read-only source).
+- `serba-indah-audit/` — arsip sesi audit (sumber merge; boleh dihapus).
 
-## Struktur file project
+## Menjalankan
+`pip install -r requirements.txt` (Mac/Linux: pip3). Termasuk `tkcalendar`.
+Contoh headless HPP:
+```
+import pandas as pd
+from hpp_engine import detect_anomalies, write_report
+anom, ring = detect_anomalies('data', pd.Timestamp('2024-01-01'),
+                              pd.Timestamp('2026-07-11'), tolerance=0.50)
+```
+Contoh headless Satuan:
+```
+import pandas as pd
+from DeteksiAnomaliSatuan import detect_unit_errors, write_report
+res, ring = detect_unit_errors('data', pd.Timestamp('2024-01-01'),
+                               pd.Timestamp('2026-07-31'), dev_threshold=0.60)
+```
+Build .exe HANYA di Windows (PyInstaller tak bisa cross-compile; build di Mac -> app Mac).
+Pakai `BUILD_bikin_exe.bat` (sudah memasang tkcalendar & pakai --hidden-import babel.numbers):
+`pyinstaller --onefile --windowed --name "DeteksiAnomali" --hidden-import babel.numbers DeteksiAnomali.py`
 
-- `hpp_engine.py` — engine murni (tanpa GUI). `detect_anomalies()`, `write_report()`,
-  `_load_dbf()`, `_build_master()`. Bisa diuji headless.
-- `DeteksiAnomaliHPP.py` — GUI tkinter: pilih folder DB, tanggal, ambang → Excel.
-- `BUILD_bikin_exe.bat` — build .exe via PyInstaller.
-- `CARA_PAKAI.txt` — panduan build & pakai (Bahasa Indonesia, untuk owner).
-- `requirements.txt` — pandas, dbfread, openpyxl, pyinstaller.
-
-## Build & jalankan
-
-Dependensi: `pip install pandas dbfread openpyxl pyinstaller` (Mac/Linux: `pip3`).
-
-Build .exe:
-    pyinstaller --onefile --windowed --name "DeteksiAnomaliHPP" DeteksiAnomaliHPP.py
-Hasil di `dist/DeteksiAnomaliHPP.exe`.
-
-PENTING:
-- PyInstaller TIDAK bisa cross-compile. Build .exe HARUS di Windows. Build di Mac
-  menghasilkan aplikasi Mac (bukan .exe). Owner memakai Windows.
+## Gotchas
+- Kerja dari salinan DBF; jangan tulis ke file live. Baca saat aplikasi aktif = aman
+  (read-only) tapi idealnya saat sepi.
+- 329 baris bersatuan tak terdaftar di master = blind spot (tak bisa diverifikasi).
+- DAMPAK_RL kasar; jangan jadi angka rugi.
+- Detektor satuan: HARGA JANGGAL itu campur (sebagian variasi harga wajar) -> cek manual.
 - Antivirus kadang salah-curiga pada .exe --onefile; jika kena, ganti ke `--onedir`.
-- Saat pakai: folder database harus berisi JUAL.DBF DAN STOK.DBF (butuh keduanya).
 
-Uji engine tanpa GUI (contoh):
-    from hpp_engine import detect_anomalies, write_report
-    import pandas as pd
-    anom, ring = detect_anomalies(FOLDER, pd.Timestamp('2024-01-01'),
-                                  pd.Timestamp('2026-07-11'), tolerance=0.50)
-
-## Gotchas / batasan yang harus diingat
-
-- Selalu KERJA DARI SALINAN DBF; jangan pernah menulis ke file live. Membaca saat
-  aplikasi kasir aktif = aman (read-only) tapi idealnya saat sepi (baris yang sedang
-  ditulis bisa terbaca setengah).
-- `DAMPAK_RL` kasar; jangan dijadikan angka kerugian. Total sangat mudah dijomplangi
-  segelintir baris ekstrem.
-- Bucket `HARGA POKOK SALAH` paling perlu verifikasi manual: untuk barang yang harga
-  belinya sungguh berfluktuasi, patokan median bisa meleset dan salah-flag.
-- Barang JASA (mis. ONGKOS POTONG/SISIR) memang berharga pokok 0 — bukan anomali.
-  Aplikasi punya filter Jasa/Non-Jasa. HPP_BENAR>0 sudah menyaring ini.
-- Barang bersatuan tak terdaftar di master (BOX, PAK, [SN, dll) = blind spot; tidak
-  masuk daftar, jumlahnya dilaporkan di sheet Ringkasan.
-- UI/label & output pakai Bahasa Indonesia. Mata uang Rupiah.
-
-## Kemungkinan langkah berikutnya (belum dikerjakan)
-
-- Kelompokkan bucket "HARGA POKOK SALAH" per barang → tentukan harga pokok benar
-  sekali per barang (koreksi massal, bukan per baris).
-- Deteksi terpisah untuk 329 baris satuan-tak-dikenal (lengkapi master dulu).
-- (Ditunda) Rebuild aplikasi kasir: PostgreSQL + logika bisnis terpusat + UOM dengan
-  satu satuan dasar + kartu stok. Ditunda karena alur bisnis existing belum terpetakan.
+## Langkah berikutnya (belum)
+- Kelompokkan bucket "HARGA POKOK SALAH" per barang -> tentukan harga pokok benar sekali.
+- Deteksi terpisah untuk baris satuan tak-dikenal (lengkapi master dulu).
+- (Ditunda) Rebuild kasir: PostgreSQL + UOM satu satuan dasar + kartu stok.

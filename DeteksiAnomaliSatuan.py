@@ -1,19 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-Engine deteksi KESALAHAN INPUT SATUAN pada data penjualan.
+Engine deteksi KESALAHAN INPUT SATUAN pada data penjualan (versi tahan harga-usang).
 
-Ide: tiap barang di master (STOK.DBF) punya sampai 3 tingkat satuan beserta
-harga jual acuannya: HARGAJUAL1 (satuan dasar), HARGAJUAL2 (+ISISAT2/SATUAN2),
-HARGAJUAL3 (+ISISAT3/SATUAN3). Kalau harga jual di faktur (JUAL.HARGAJUAL) jauh
-dari harga satuan yang DIINPUT, tapi cocok dengan harga satuan LAIN, berarti
-satuannya kemungkinan salah pilih saat input.
+Masalah versi lama: membandingkan harga faktur dengan harga jual master TERKINI,
+padahal faktur lama bisa memakai harga lama -> false positive saat harga berubah.
 
-Barang jasa/non-stok (mis. ONGKOS) dikecualikan karena harganya wajar berubah.
+Perbaikan:
+- "Harga wajar untuk satuan yang diinput" diambil dari RIWAYAT PENJUALAN barang itu
+  sendiri (median HARGAJUAL per barang+satuan dari JUAL.DBF), bukan dari master.
+  -> tahan terhadap perubahan harga; harga lama yang konsisten dianggap wajar.
+- "Satuan yang seharusnya" ditentukan dari STRUKTUR faktor isi (ISISAT2/ISISAT3 di
+  master) x harga satuan-dasar lazim. Rasio antar-satuan stabil walau level harga berubah.
+
+Anomali = harga jual jauh (> ambang) dari harga lazim satuan yang diinput, DAN cocok
+dengan harga satuan lain (SALAH SATUAN) atau tidak cocok manapun (HARGA JANGGAL).
+Barang jasa/non-stok dikecualikan.
 """
 import os
 import numpy as np
 import pandas as pd
 from dbfread import DBF
+
+MIN_HIST = 2   # minimal transaksi barang+satuan agar harga lazim dianggap layak jadi patokan
 
 
 def _load_dbf(path):
@@ -22,45 +30,32 @@ def _load_dbf(path):
     return df
 
 
-def _num(v):
-    try:
-        v = float(v); return v if v > 0 else np.nan
-    except Exception:
-        return np.nan
-
-
 def _truthy(v):
     return str(v).strip().lower() in ('true', 't', '1', '1.0', 'y', 'yes')
 
 
-def _build_units(stok):
-    """kode -> list[(satuan, harga_acuan)] untuk 3 tingkat; dan set barang jasa/non-stok."""
-    units, excl = {}, set()
+def _build_master(stok):
+    """kode -> satuan dasar; isi[(kode,satuan)] -> faktor konversi; set barang jasa/non-stok."""
+    base, isi, excl = {}, {}, set()
     for _, r in stok.iterrows():
-        k = r['KODEBRG']
-        nm = str(r.get('NAMABRG', '')).upper()
+        k = r['KODEBRG']; nm = str(r.get('NAMABRG', '')).upper()
         if _truthy(r.get('NONSTOK')) or _truthy(r.get('SERVICE')) or 'ONGKOS' in nm or 'JASA' in nm:
             excl.add(k)
-        h1 = _num(r.get('HARGAJUAL1')); s1 = str(r.get('SATUAN', '')).strip()
-        lst = []
-        if s1:
-            lst.append((s1, h1))
-        for sN, iN, hN in (('SATUAN2', 'ISISAT2', 'HARGAJUAL2'), ('SATUAN3', 'ISISAT3', 'HARGAJUAL3')):
-            su = str(r.get(sN, '')).strip(); iso = _num(r.get(iN)); hh = _num(r.get(hN))
-            if su and su not in ('0', 'nan', 'None'):
-                if np.isnan(hh) and not np.isnan(h1) and not np.isnan(iso):
-                    hh = h1 * iso          # harga satuan turunan = harga dasar x isi
-                lst.append((su, hh))
-        units[k] = lst
-    return units, excl
+        b = str(r.get('SATUAN', '')).strip()
+        base[k] = b; isi[(k, b)] = 1.0
+        for sN, iN in (('SATUAN2', 'ISISAT2'), ('SATUAN3', 'ISISAT3')):
+            su = str(r.get(sN, '')).strip()
+            try:
+                iv = float(r.get(iN))
+            except Exception:
+                iv = np.nan
+            if su and su not in ('0', 'nan', 'None') and iv == iv and iv > 0:
+                isi[(k, su)] = iv
+    return base, isi, excl
 
 
 def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
-                       match_tol=0.20, progress=None):
-    """
-    dev_threshold : seberapa jauh harga jual dari harga satuan diinput agar dicurigai (0.60=60%).
-    match_tol     : toleransi agar harga jual dianggap 'cocok' satuan lain (0.20=20%, menampung diskon).
-    """
+                       match_tol=0.25, progress=None):
     def say(m):
         if progress: progress(m)
 
@@ -70,7 +65,7 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
 
     say("Membaca master STOK.DBF ...")
     stok = _load_dbf(os.path.join(db_folder, 'STOK.DBF'))
-    units, excl = _build_units(stok)
+    base, isi, excl = _build_master(stok)
 
     say("Menyaring periode ...")
     d = jual[(jual['TANGGAL'] >= date_from) & (jual['TANGGAL'] <= date_to)].copy()
@@ -79,43 +74,60 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
     d = d[~d['KODEBRG'].isin(excl)]
     d['SATUAN'] = d['SATUAN'].astype(str).str.strip()
     d['HJ'] = pd.to_numeric(d['HARGAJUAL'], errors='coerce')
+    d = d[d['HJ'] > 0]
 
-    say("Membandingkan harga jual dengan daftar harga satuan ...")
+    say("Menghitung harga jual lazim dari riwayat penjualan ...")
+    grp = d.groupby(['KODEBRG', 'SATUAN'])['HJ']
+    lazim = grp.median().to_dict()
+    cnt = grp.count().to_dict()
+
+    # harga satuan-dasar lazim per barang (untuk membangun pembanding antar-satuan)
+    def base_lazim(k):
+        b = base.get(k); v = lazim.get((k, b))
+        if v and cnt.get((k, b), 0) >= MIN_HIST:
+            return v
+        cands = [lazim[(kk, s)] / isi[(kk, s)] for (kk, s) in lazim
+                 if kk == k and (kk, s) in isi and isi[(kk, s)] > 0 and cnt.get((kk, s), 0) >= MIN_HIST]
+        return float(np.median(cands)) if cands else v
+    bl = {k: base_lazim(k) for k in set(d['KODEBRG'])}
+
+    say("Membandingkan tiap baris dengan harga lazim ...")
     out = []
     diperiksa = 0
     for x in d.itertuples(index=False):
-        lst = units.get(x.KODEBRG)
-        hj = x.HJ; sat = x.SATUAN
-        if not lst or pd.isna(hj) or hj <= 0:
-            continue
-        exp = next((h for (s, h) in lst if s == sat and not np.isnan(h)), np.nan)
-        if np.isnan(exp):
+        k = x.KODEBRG; sat = x.SATUAN; hj = x.HJ
+        own = lazim.get((k, sat))
+        if not own or own <= 0 or cnt.get((k, sat), 0) < MIN_HIST:
             continue
         diperiksa += 1
-        dev = abs(hj - exp) / exp
+        dev = abs(hj - own) / own
         if dev <= dev_threshold:
             continue
-        # cari satuan lain yang harganya cocok dengan harga jual
-        matches = [(s, h) for (s, h) in lst if (not np.isnan(h)) and h > 0 and s != sat
-                   and abs(hj - h) / h <= match_tol]
-        if matches:
-            s_benar, h_benar = min(matches, key=lambda sh: abs(hj - sh[1]))
-            kategori = 'SALAH SATUAN'
-        else:
-            s_benar, h_benar = '', np.nan
-            kategori = 'HARGA JANGGAL (cek manual)'
+        # tentukan satuan yang seharusnya dari struktur faktor isi
+        b = bl.get(k); seharus = ''; hseharus = np.nan
+        if b and b > 0:
+            best = None
+            for (kk, s), f in isi.items():
+                if kk != k or s == sat:
+                    continue
+                exp = b * f
+                if exp > 0 and abs(hj - exp) / exp <= match_tol:
+                    if best is None or abs(hj - exp) < best[1]:
+                        best = (s, abs(hj - exp), exp)
+            if best:
+                seharus, hseharus = best[0], round(best[2], 0)
+        kategori = 'SALAH SATUAN' if seharus else 'HARGA JANGGAL (cek manual)'
         out.append({
-            'TANGGAL': x.TANGGAL, 'NOFAKTUR': x.NOFAKTUR, 'KODEBRG': x.KODEBRG,
-            'NAMABRG': x.NAMABRG, 'SATUAN_DIINPUT': sat,
-            'BANYAK': getattr(x, 'ISISATUAN', np.nan),
+            'TANGGAL': x.TANGGAL, 'NOFAKTUR': x.NOFAKTUR, 'KODEBRG': k, 'NAMABRG': x.NAMABRG,
+            'SATUAN_DIINPUT': sat, 'BANYAK': getattr(x, 'ISISATUAN', np.nan),
             'HARGA_JUAL': round(hj, 0),
-            'HRG_UTK_SATUAN_INI': round(exp, 0),
-            'SATUAN_SEHARUSNYA': s_benar,
-            'HRG_UTK_SATUAN_SEHARUSNYA': round(h_benar, 0) if not np.isnan(h_benar) else '',
+            'HRG_LAZIM_SATUAN_INI': round(own, 0),
+            'SATUAN_SEHARUSNYA': seharus,
+            'HRG_LAZIM_SEHARUSNYA': hseharus if hseharus == hseharus else '',
+            'DEV_PCT': round(dev * 100, 0),
             'KATEGORI': kategori,
             'NAMAUSER': getattr(x, 'NAMAUSER', ''),
         })
-
     res = pd.DataFrame(out)
     if len(res):
         res = res.sort_values(['KATEGORI', 'TANGGAL'])
@@ -140,23 +152,28 @@ def write_report(res, ring, out_path):
         ("DETEKSI KESALAHAN INPUT SATUAN", 12),
         (f"Periode: {df:%d/%m/%Y} s/d {dt:%d/%m/%Y}", 0),
         ("", 0),
-        (f"Baris diperiksa (punya harga satuan): {ring['diperiksa']:,}", 0),
-        (f"SALAH SATUAN (harga jual cocok satuan lain): {ring['salah_satuan']:,}", 0),
+        (f"Baris diperiksa (punya riwayat harga): {ring['diperiksa']:,}", 0),
+        (f"SALAH SATUAN (harga cocok satuan lain): {ring['salah_satuan']:,}", 0),
         (f"HARGA JANGGAL (perlu cek manual): {ring['harga_janggal']:,}", 0),
         (f"Barang jasa/non-stok dikecualikan: {ring['jasa_dikecualikan']:,}", 0),
         ("", 0),
         ("Cara baca:", 11),
-        ("SATUAN_DIINPUT     = satuan yang tercatat di faktur.", 0),
-        ("BANYAK             = jumlah dalam satuan jual (spt di faktur), bukan satuan dasar.", 0),
-        ("HARGA_JUAL         = harga jual di faktur.", 0),
-        ("HRG_UTK_SATUAN_INI = harga wajar bila satuannya memang seperti diinput.", 0),
-        ("SATUAN_SEHARUSNYA  = satuan yang harganya cocok dengan HARGA_JUAL.", 0),
-        ("MERAH  = SALAH SATUAN (yakin). ORANYE = HARGA JANGGAL (cek manual).", 0),
+        ("SATUAN_DIINPUT       = satuan yang tercatat di faktur.", 0),
+        ("BANYAK               = jumlah dalam satuan jual (spt di faktur).", 0),
+        ("HARGA_JUAL           = harga jual di faktur.", 0),
+        ("HRG_LAZIM_SATUAN_INI = harga jual LAZIM barang ini utk satuan yg diinput,", 0),
+        ("                       diambil dari riwayat penjualan (bukan harga master).", 0),
+        ("SATUAN_SEHARUSNYA    = satuan yang harganya cocok dengan HARGA_JUAL.", 0),
+        ("DEV_PCT              = selisih HARGA_JUAL thd harga lazim satuan diinput (%).", 0),
+        ("MERAH = SALAH SATUAN (yakin). ORANYE = HARGA JANGGAL (cek manual).", 0),
+        ("", 0),
+        ("Catatan: patokan harga diambil dari riwayat penjualan barang itu sendiri,", 0),
+        ("sehingga harga lama yang konsisten TIDAK dianggap salah.", 0),
     ]
     for i, (t, sz) in enumerate(lines, 1):
         c = ws.cell(row=i, column=1, value=t)
         if sz: c.font = Font(bold=True, size=sz)
-    ws.column_dimensions['A'].width = 70
+    ws.column_dimensions['A'].width = 72
 
     ws2 = wb.create_sheet("Kesalahan Satuan")
     if len(res) == 0:
@@ -175,9 +192,9 @@ def write_report(res, ring, out_path):
             for j, v in enumerate(vals, 1):
                 if hasattr(v, 'strftime'): v = v.strftime('%d/%m/%Y')
                 c = ws2.cell(row=i, column=j, value=v); c.fill = fill; c.border = bd
-        widths = {'TANGGAL':12,'NOFAKTUR':13,'KODEBRG':9,'NAMABRG':34,'SATUAN_DIINPUT':14,'BANYAK':9,
-                  'HARGA_JUAL':12,'HRG_UTK_SATUAN_INI':18,'SATUAN_SEHARUSNYA':17,
-                  'HRG_UTK_SATUAN_SEHARUSNYA':24,'KATEGORI':24,'NAMAUSER':11}
+        widths = {'TANGGAL':12,'NOFAKTUR':13,'KODEBRG':9,'NAMABRG':34,'SATUAN_DIINPUT':15,'BANYAK':9,
+                  'HARGA_JUAL':12,'HRG_LAZIM_SATUAN_INI':20,'SATUAN_SEHARUSNYA':17,
+                  'HRG_LAZIM_SEHARUSNYA':20,'DEV_PCT':9,'KATEGORI':24,'NAMAUSER':11}
         for j, h in enumerate(heads, 1):
             ws2.column_dimensions[get_column_letter(j)].width = widths.get(h, 12)
         ws2.freeze_panes = "A2"; ws2.auto_filter.ref = f"A1:{get_column_letter(len(heads))}{len(res)+1}"
