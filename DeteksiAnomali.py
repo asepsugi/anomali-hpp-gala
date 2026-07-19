@@ -145,9 +145,9 @@ class App:
     HPP_OPTS = ["0.1%  (super teliti, semua selisih)", "30%  (lebih teliti, banyak noise)",
                 "50%  (disarankan)", "70%  (paling parah saja)", "90%  (hampir pasti bug)"]
     HPP_MAP = {"0.1": 0.001, "30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}
-    SAT_OPTS = ["40%  (lebih teliti, banyak noise)", "60%  (disarankan)",
-                "80%  (paling parah saja)"]
-    SAT_MAP = {"40": 0.40, "60": 0.60, "80": 0.80}
+    SAT_OPTS = ["0.1%  (super teliti, semua selisih)", "40%  (lebih teliti, banyak noise)",
+                "60%  (disarankan)", "80%  (paling parah saja)"]
+    SAT_MAP = {"0.1": 0.001, "40": 0.40, "60": 0.60, "80": 0.80}
 
     def _on_mode(self):
         if self.mode_var.get() == "HPP":
@@ -157,7 +157,7 @@ class App:
         else:
             self.tol_label.config(text="Ambang (selisih harga jual minimal):")
             self.tol_combo["values"] = self.SAT_OPTS
-            self.tol_var.set(self.SAT_OPTS[1])   # 60%
+            self.tol_var.set(self.SAT_OPTS[2])   # 60%
 
     def pilih_folder(self):
         d = filedialog.askdirectory(title="Pilih folder yang berisi JUAL.DBF")
