@@ -1,9 +1,19 @@
 @echo off
+cd /d "%~dp0"
 title Build Deteksi Anomali
 echo ==================================================
 echo   MEMBUAT APLIKASI Deteksi Anomali (.exe)
 echo   (HPP + Satuan dalam satu aplikasi)
 echo ==================================================
+echo.
+echo [1/3] Mengambil kode terbaru dari GitHub (git pull)...
+git --version >nul 2>&1
+if errorlevel 1 (
+  echo [!] Git tidak ditemukan, LEWATI update. Build pakai kode yang ada.
+) else (
+  git pull origin main
+  if errorlevel 1 ( echo [!] git pull gagal ^(ada perubahan lokal / masalah koneksi^). Lanjut build dgn kode yang ada. )
+)
 echo.
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -14,14 +24,29 @@ if errorlevel 1 (
   pause
   exit /b
 )
-echo [1/2] Memasang komponen yang dibutuhkan...
+echo [2/3] Memasang komponen yang dibutuhkan...
 python -m pip install --upgrade pip
 python -m pip install pandas dbfread openpyxl pyinstaller numpy tkcalendar
 if errorlevel 1 ( echo [!] Gagal memasang komponen. & pause & exit /b )
 echo.
-echo [2/2] Membuat file EXE (bisa makan beberapa menit)...
-python -m PyInstaller --onefile --windowed --name "DeteksiAnomali" --hidden-import babel.numbers DeteksiAnomali.py
-if errorlevel 1 ( echo [!] Build gagal. & pause & exit /b )
+echo [3/3] Membuat file EXE (bisa makan beberapa menit)...
+echo     Menutup aplikasi lama bila masih berjalan...
+taskkill /IM DeteksiAnomali.exe /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+if exist "dist\DeteksiAnomali.exe" del /f /q "dist\DeteksiAnomali.exe" >nul 2>&1
+if exist "build" rmdir /s /q "build" >nul 2>&1
+python -m PyInstaller --onefile --windowed --noconfirm --name "DeteksiAnomali" --hidden-import babel.numbers DeteksiAnomali.py
+if errorlevel 1 (
+  echo.
+  echo [!] Build gagal.
+  echo     Jika error "Access is denied" pada DeteksiAnomali.exe:
+  echo       - Pastikan aplikasi DeteksiAnomali TIDAK sedang terbuka.
+  echo       - Tutup jendela Explorer yang membuka folder dist.
+  echo       - Matikan sementara antivirus, atau ganti --onefile menjadi --onedir.
+  echo.
+  pause
+  exit /b
+)
 echo.
 echo ==================================================
 echo   SELESAI!
