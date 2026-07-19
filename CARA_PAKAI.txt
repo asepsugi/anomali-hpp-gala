@@ -1,23 +1,40 @@
 =========================================================
-  APLIKASI DETEKSI ANOMALI HPP  (versi terkoreksi)
+  APLIKASI DETEKSI ANOMALI  (HPP + Satuan, satu aplikasi)
 =========================================================
+
+Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
+  1. Anomali HPP     -> HPP yang salah hitung di laporan Laba.
+  2. Kesalahan Satuan-> salah pilih satuan (PCS/LSN/DUS) saat input jual.
 
 --- A. MEMBUAT FILE .EXE (sekali, di komputer WINDOWS) ---
   PENTING: build harus di Windows. Build di Mac menghasilkan app Mac, bukan .exe.
   1. Pasang Python (python.org, centang "Add to PATH").
-  2. Taruh 3 file dalam 1 folder: DeteksiAnomaliHPP.py, hpp_engine.py, BUILD_bikin_exe.bat
+  2. Taruh 4 file dalam 1 folder:
+        DeteksiAnomali.py
+        hpp_engine.py
+        DeteksiAnomaliSatuan.py
+        BUILD_bikin_exe.bat
   3. Dobel-klik BUILD_bikin_exe.bat, tunggu selesai.
-  4. Hasil: dist\DeteksiAnomaliHPP.exe -> copy ke komputer yang dipakai.
+  4. Hasil: dist\DeteksiAnomali.exe -> copy ke komputer yang dipakai.
+     (Kalau antivirus curiga pada .exe, ganti --onefile jadi --onedir di
+      BUILD_bikin_exe.bat, lalu build ulang.)
 
 --- B. MEMAKAI (owner) ---
-  1. Dobel-klik DeteksiAnomaliHPP.exe
+  1. Dobel-klik DeteksiAnomali.exe
   2. Folder database: arahkan ke lokasi JUAL.DBF & STOK.DBF (biasanya Z:\).
-     (Aplikasi butuh STOK.DBF untuk tahu harga pokok & konversi satuan.)
-  3. Isi tanggal MULAI & SAMPAI (format HARI/BULAN/TAHUN).
-  4. Pilih ambang (default 50%). Klik ANALISA ANOMALI.
-  5. Hasil tersimpan di folder Documents dan otomatis terbuka.
+     (Aplikasi butuh KEDUANYA: JUAL.DBF dan STOK.DBF.)
+  3. Pilih JENIS PEMERIKSAAN:
+        - Anomali HPP, atau
+        - Kesalahan Satuan
+     (Pilihan "Ambang" otomatis menyesuaikan jenis yang dipilih.)
+  4. Isi tanggal MULAI & SAMPAI (format HARI/BULAN/TAHUN).
+  5. Pilih ambang (default sudah disarankan). Klik ANALISA.
+  6. Hasil tersimpan di folder Documents dan otomatis terbuka.
+     Nama file dibedakan: Anomali_HPP_... atau Anomali_Satuan_...
 
---- C. MEMBACA HASIL ---
+=========================================================
+  C1. MEMBACA HASIL - ANOMALI HPP
+=========================================================
   Anomali = HPP yang MUNCUL di aplikasi (HPP_LAYAR) berbeda jauh dari HPP
   seharusnya (HPP_BENAR = harga pokok master x konversi satuan).
 
@@ -46,4 +63,27 @@
 
   Baris dengan satuan yang tidak terdaftar di master TIDAK bisa diverifikasi
   otomatis dan tidak masuk daftar; jumlahnya ditulis di sheet Ringkasan.
+
+=========================================================
+  C2. MEMBACA HASIL - KESALAHAN SATUAN
+=========================================================
+  Ide: tiap barang punya sampai 3 tingkat satuan dengan harga jual acuannya.
+  Kalau harga jual di faktur jauh dari harga satuan yang DIINPUT, tapi cocok
+  dengan harga satuan LAIN, berarti satuannya kemungkinan salah pilih.
+
+  Warna baris:
+    MERAH  = SALAH SATUAN (yakin) -> harga jual cocok dengan satuan lain.
+    ORANYE = HARGA JANGGAL -> tidak cocok satuan mana pun, cek manual.
+
+  Kolom:
+    SATUAN_DIINPUT           = satuan yang tercatat di faktur
+    BANYAK                   = jumlah dalam satuan jual (spt di faktur)
+    HARGA_JUAL               = harga jual di faktur
+    HRG_UTK_SATUAN_INI       = harga wajar bila satuannya memang seperti diinput
+    SATUAN_SEHARUSNYA        = satuan yang harganya cocok dengan HARGA_JUAL
+    HRG_UTK_SATUAN_SEHARUSNYA= harga acuan untuk satuan yang seharusnya
+    NOFAKTUR                 = faktur jual yang perlu diperiksa di aplikasi
+
+  Barang jasa/non-stok (mis. ONGKOS) dikecualikan karena harganya wajar berubah;
+  jumlahnya ditulis di sheet Ringkasan.
 =========================================================

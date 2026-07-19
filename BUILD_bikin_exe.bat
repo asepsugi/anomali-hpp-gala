@@ -1,7 +1,8 @@
 @echo off
-title Build Deteksi Anomali HPP
+title Build Deteksi Anomali
 echo ==================================================
-echo   MEMBUAT APLIKASI Deteksi Anomali HPP (.exe)
+echo   MEMBUAT APLIKASI Deteksi Anomali (.exe)
+echo   (HPP + Satuan dalam satu aplikasi)
 echo ==================================================
 echo.
 python --version >nul 2>&1
@@ -15,16 +16,16 @@ if errorlevel 1 (
 )
 echo [1/2] Memasang komponen yang dibutuhkan...
 python -m pip install --upgrade pip
-python -m pip install pandas dbfread openpyxl pyinstaller
+python -m pip install pandas dbfread openpyxl pyinstaller numpy
 if errorlevel 1 ( echo [!] Gagal memasang komponen. & pause & exit /b )
 echo.
 echo [2/2] Membuat file EXE (bisa makan beberapa menit)...
-python -m PyInstaller --onefile --windowed --name "DeteksiAnomaliHPP" DeteksiAnomaliHPP.py
+python -m PyInstaller --onefile --windowed --name "DeteksiAnomali" DeteksiAnomali.py
 if errorlevel 1 ( echo [!] Build gagal. & pause & exit /b )
 echo.
 echo ==================================================
 echo   SELESAI!
-echo   File EXE ada di:  dist\DeteksiAnomaliHPP.exe
+echo   File EXE ada di:  dist\DeteksiAnomali.exe
 echo   Copy file itu ke komputer server/kasir, dobel-klik utk pakai.
 echo ==================================================
 pause
