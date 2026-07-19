@@ -9,8 +9,12 @@ Perbaikan:
 - "Harga wajar untuk satuan yang diinput" diambil dari RIWAYAT PENJUALAN barang itu
   sendiri (median HARGAJUAL per barang+satuan dari JUAL.DBF), bukan dari master.
   -> tahan terhadap perubahan harga; harga lama yang konsisten dianggap wajar.
-- "Satuan yang seharusnya" ditentukan dari STRUKTUR faktor isi (ISISAT2/ISISAT3 di
-  master) x harga satuan-dasar lazim. Rasio antar-satuan stabil walau level harga berubah.
+- Patokan median dipelajari dari SELURUH riwayat (semua tanggal); periode terpilih hanya
+  menyaring baris yang DILAPORKAN. Ini mencegah periode pendek menyembunyikan anomali
+  (bila baris rusak jadi satu-satunya sampel di periode itu -> median = harga rusak).
+- "Satuan yang seharusnya" diutamakan dari MEDIAN ASLI satuan lain di riwayat; hanya bila
+  satuan itu tak berdata dipakai fallback STRUKTUR faktor isi (ISISAT2/ISISAT3) x harga
+  satuan-dasar lazim.
 
 Anomali = harga jual jauh (> ambang) dari harga lazim satuan yang diinput, DAN cocok
 dengan harga satuan lain (SALAH SATUAN) atau tidak cocok manapun (HARGA JANGGAL).
@@ -67,8 +71,8 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
     stok = _load_dbf(os.path.join(db_folder, 'STOK.DBF'))
     base, isi, excl = _build_master(stok)
 
-    say("Menyaring periode ...")
-    d = jual[(jual['TANGGAL'] >= date_from) & (jual['TANGGAL'] <= date_to)].copy()
+    say("Menyiapkan data (buang retur/transfer & jasa) ...")
+    d = jual.copy()
     nf = d['NOFAKTUR'].astype(str).str.strip().str.upper()
     d = d[~nf.str.startswith(('R', 'T'))]
     d = d[~d['KODEBRG'].isin(excl)]
@@ -76,12 +80,18 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
     d['HJ'] = pd.to_numeric(d['HARGAJUAL'], errors='coerce')
     d = d[d['HJ'] > 0]
 
-    say("Menghitung harga jual lazim dari riwayat penjualan ...")
+    say("Menghitung harga jual lazim dari SELURUH riwayat penjualan ...")
+    # PENTING: patokan harga dipelajari dari seluruh riwayat (semua tanggal), BUKAN
+    # hanya periode terpilih. Kalau dibatasi periode, periode pendek bisa menyembunyikan
+    # anomali (baris rusak jadi satu-satunya sampel -> median = harga rusak -> lolos).
     grp = d.groupby(['KODEBRG', 'SATUAN'])['HJ']
     lazim = grp.median().to_dict()
     cnt = grp.count().to_dict()
 
-    # harga satuan-dasar lazim per barang (untuk membangun pembanding antar-satuan)
+    # baris yang DILAPORKAN hanya dalam periode terpilih (patokan tetap dari seluruh riwayat)
+    rep = d[(d['TANGGAL'] >= date_from) & (d['TANGGAL'] <= date_to)]
+
+    # harga satuan-dasar lazim per barang (untuk pembanding antar-satuan bila satuan lain tak berdata)
     def base_lazim(k):
         b = base.get(k); v = lazim.get((k, b))
         if v and cnt.get((k, b), 0) >= MIN_HIST:
@@ -89,12 +99,12 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
         cands = [lazim[(kk, s)] / isi[(kk, s)] for (kk, s) in lazim
                  if kk == k and (kk, s) in isi and isi[(kk, s)] > 0 and cnt.get((kk, s), 0) >= MIN_HIST]
         return float(np.median(cands)) if cands else v
-    bl = {k: base_lazim(k) for k in set(d['KODEBRG'])}
+    bl = {k: base_lazim(k) for k in set(rep['KODEBRG'])}
 
     say("Membandingkan tiap baris dengan harga lazim ...")
     out = []
     diperiksa = 0
-    for x in d.itertuples(index=False):
+    for x in rep.itertuples(index=False):
         k = x.KODEBRG; sat = x.SATUAN; hj = x.HJ
         own = lazim.get((k, sat))
         if not own or own <= 0 or cnt.get((k, sat), 0) < MIN_HIST:
@@ -103,19 +113,21 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
         dev = abs(hj - own) / own
         if dev <= dev_threshold:
             continue
-        # tentukan satuan yang seharusnya dari struktur faktor isi
+        # tentukan satuan yang seharusnya: utamakan MEDIAN ASLI satuan lain dari riwayat,
+        # fallback ke harga_dasar x faktor bila satuan itu tak punya cukup riwayat.
         b = bl.get(k); seharus = ''; hseharus = np.nan
-        if b and b > 0:
-            best = None
-            for (kk, s), f in isi.items():
-                if kk != k or s == sat:
-                    continue
-                exp = b * f
-                if exp > 0 and abs(hj - exp) / exp <= match_tol:
-                    if best is None or abs(hj - exp) < best[1]:
-                        best = (s, abs(hj - exp), exp)
-            if best:
-                seharus, hseharus = best[0], round(best[2], 0)
+        best = None
+        for (kk, s), f in isi.items():
+            if kk != k or s == sat:
+                continue
+            exp = lazim.get((k, s)) if cnt.get((k, s), 0) >= MIN_HIST else None
+            if not exp or exp <= 0:
+                exp = (b * f) if (b and b > 0) else None
+            if exp and exp > 0 and abs(hj - exp) / exp <= match_tol:
+                if best is None or abs(hj - exp) < best[1]:
+                    best = (s, abs(hj - exp), exp)
+        if best:
+            seharus, hseharus = best[0], round(best[2], 0)
         kategori = 'SALAH SATUAN' if seharus else 'HARGA JANGGAL (cek manual)'
         out.append({
             'TANGGAL': x.TANGGAL, 'NOFAKTUR': x.NOFAKTUR, 'KODEBRG': k, 'NAMABRG': x.NAMABRG,
@@ -167,8 +179,9 @@ def write_report(res, ring, out_path):
         ("DEV_PCT              = selisih HARGA_JUAL thd harga lazim satuan diinput (%).", 0),
         ("MERAH = SALAH SATUAN (yakin). ORANYE = HARGA JANGGAL (cek manual).", 0),
         ("", 0),
-        ("Catatan: patokan harga diambil dari riwayat penjualan barang itu sendiri,", 0),
-        ("sehingga harga lama yang konsisten TIDAK dianggap salah.", 0),
+        ("Catatan: patokan harga diambil dari SELURUH riwayat penjualan barang itu", 0),
+        ("sendiri (semua tanggal), sehingga harga lama yang konsisten TIDAK dianggap", 0),
+        ("salah, dan periode pendek tidak menyembunyikan anomali.", 0),
     ]
     for i, (t, sz) in enumerate(lines, 1):
         c = ws.cell(row=i, column=1, value=t)

@@ -99,8 +99,14 @@ dev_threshold=0.60, match_tol=0.25, progress=None)` + `write_report(res, ring, o
 - "Wajar/tidak untuk satuan yg diinput" -> median HARGAJUAL per (barang,satuan) dari
   RIWAYAT PENJUALAN (JUAL), BUKAN harga master. -> tahan harga usang (mis. BATRE PAK
   yang lazimnya 12.700 tidak lagi salah-tuduh walau master masih 6.500).
-- "Satuan yg seharusnya" -> struktur faktor isi (rasio antar-satuan stabil) x harga
-  satuan-dasar lazim.
+- PENTING: patokan median dipelajari dari SELURUH riwayat (semua tanggal); periode
+  terpilih hanya menyaring baris yang DILAPORKAN. Kalau median dibatasi periode, periode
+  pendek bisa menyembunyikan anomali (baris rusak jadi satu-satunya sampel -> median =
+  harga rusak -> lolos). Contoh terbukti: faktur 2601-000810 (BUSSINES FILE RED, diinput
+  PCS @31.500 padahal itu harga LSN) hilang saat median per-periode, muncul lagi setelah
+  median seluruh riwayat.
+- "Satuan yg seharusnya" -> diutamakan MEDIAN ASLI satuan lain di riwayat (mis. LSN
+  31.500 cocok persis), fallback ke struktur faktor isi x harga dasar bila tak berdata.
 - Anomali bila HARGAJUAL menyimpang > ambang (default 60%) dari harga lazim satuan
   diinput; kalau cocok satuan lain (match_tol 25%) -> SALAH SATUAN, kalau tidak ->
   HARGA JANGGAL (cek manual). Output punya kolom DEV_PCT.

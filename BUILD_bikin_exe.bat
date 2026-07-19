@@ -9,11 +9,30 @@ echo.
 echo [1/3] Mengambil kode terbaru dari GitHub (git pull)...
 git --version >nul 2>&1
 if errorlevel 1 (
-  echo [!] Git tidak ditemukan, LEWATI update. Build pakai kode yang ada.
-) else (
-  git pull origin main
-  if errorlevel 1 ( echo [!] git pull gagal ^(ada perubahan lokal / masalah koneksi^). Lanjut build dgn kode yang ada. )
+  echo.
+  echo ==================================================
+  echo   [!] GIT TIDAK DITEMUKAN - kode TIDAK diperbarui.
+  echo       Build akan memakai kode yang ADA di folder ini.
+  echo ==================================================
+  echo.
+  echo   Tekan sembarang tombol untuk TETAP lanjut build,
+  echo   atau TUTUP jendela ini untuk batal ^& perbaiki dulu.
+  pause >nul
+  goto after_pull
 )
+git pull origin main
+if errorlevel 1 (
+  echo.
+  echo ==================================================
+  echo   [!] GIT PULL GAGAL - KODE MUNGKIN BELUM TERUPDATE.
+  echo       Kemungkinan ada perubahan lokal / tidak ada internet.
+  echo ==================================================
+  echo.
+  echo   Tekan sembarang tombol untuk TETAP lanjut build,
+  echo   atau TUTUP jendela ini untuk batal ^& perbaiki dulu.
+  pause >nul
+)
+:after_pull
 echo.
 python --version >nul 2>&1
 if errorlevel 1 (
