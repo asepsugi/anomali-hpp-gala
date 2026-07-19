@@ -14,6 +14,7 @@ Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
         hpp_engine.py
         DeteksiAnomaliSatuan.py
         BUILD_bikin_exe.bat
+     (BUILD_bikin_exe.bat sudah otomatis memasang komponen kalender tkcalendar.)
   3. Dobel-klik BUILD_bikin_exe.bat, tunggu selesai.
   4. Hasil: dist\DeteksiAnomali.exe -> copy ke komputer yang dipakai.
      (Kalau antivirus curiga pada .exe, ganti --onefile jadi --onedir di
@@ -27,7 +28,9 @@ Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
         - Anomali HPP, atau
         - Kesalahan Satuan
      (Pilihan "Ambang" otomatis menyesuaikan jenis yang dipilih.)
-  4. Isi tanggal MULAI & SAMPAI (format HARI/BULAN/TAHUN).
+  4. Tanggal MULAI & SAMPAI: klik kotak tanggal, pilih dari kalender.
+     (Folder database yang terakhir dipakai otomatis tersimpan, tidak perlu
+      pilih ulang tiap buka aplikasi.)
   5. Pilih ambang (default sudah disarankan). Klik ANALISA.
   6. Hasil tersimpan di folder Documents dan otomatis terbuka.
      Nama file dibedakan: Anomali_HPP_... atau Anomali_Satuan_...

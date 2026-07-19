@@ -9,6 +9,7 @@ Dua jenis cek dalam satu aplikasi:
   2. SATUAN -> DeteksiAnomaliSatuan.detect_unit_errors (salah pilih satuan saat input)
 """
 import os
+import json
 import threading
 import queue
 import datetime as dt
@@ -19,8 +20,31 @@ import pandas as pd
 import hpp_engine
 import DeteksiAnomaliSatuan as satuan_engine
 
+try:
+    from tkcalendar import DateEntry   # widget kalender (opsional)
+    HAS_CALENDAR = True
+except Exception:
+    HAS_CALENDAR = False               # fallback: ketik manual
+
 APP_TITLE = "Deteksi Anomali - SERBA INDAH"
 DEFAULT_FOLDER = "Z:\\"
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".deteksi_anomali.json")
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+    except Exception:
+        pass  # gagal simpan setelan bukan masalah kritis
 
 
 def parse_tanggal(s):
@@ -37,6 +61,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.q = queue.Queue()
+        self.cfg = load_config()
         root.title(APP_TITLE)
         root.geometry("560x500")
         root.resizable(False, False)
@@ -53,7 +78,7 @@ class App:
         # Folder database
         tk.Label(frm, text="Folder database (berisi JUAL.DBF & STOK.DBF):", anchor="w").grid(
             row=0, column=0, columnspan=3, sticky="w")
-        self.folder_var = tk.StringVar(value=DEFAULT_FOLDER)
+        self.folder_var = tk.StringVar(value=self.cfg.get("folder", DEFAULT_FOLDER))
         self.folder_entry = tk.Entry(frm, textvariable=self.folder_var, width=48)
         self.folder_entry.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 10))
         tk.Button(frm, text="Pilih...", command=self.pilih_folder, width=8).grid(row=1, column=2, padx=(6, 0))
@@ -72,15 +97,25 @@ class App:
         today = dt.date.today()
         awal_default = today.replace(day=1)
         tk.Label(frm, text="Tanggal MULAI:", anchor="w").grid(row=4, column=0, sticky="w")
-        self.dari_var = tk.StringVar(value=awal_default.strftime("%d/%m/%Y"))
-        tk.Entry(frm, textvariable=self.dari_var, width=16).grid(row=4, column=1, sticky="w", pady=4)
-
         tk.Label(frm, text="Tanggal SAMPAI:", anchor="w").grid(row=5, column=0, sticky="w")
-        self.sampai_var = tk.StringVar(value=today.strftime("%d/%m/%Y"))
-        tk.Entry(frm, textvariable=self.sampai_var, width=16).grid(row=5, column=1, sticky="w", pady=4)
-
-        tk.Label(frm, text="(format: HARI/BULAN/TAHUN, contoh 01/01/2024)",
-                 font=("Segoe UI", 8), fg="#888").grid(row=6, column=0, columnspan=3, sticky="w")
+        if HAS_CALENDAR:
+            cal_opts = dict(width=14, date_pattern="dd/mm/yyyy", locale="id_ID",
+                            background="#1F4E78", foreground="white", borderwidth=2)
+            self.dari_entry = DateEntry(frm, **cal_opts)
+            self.dari_entry.set_date(awal_default)
+            self.dari_entry.grid(row=4, column=1, sticky="w", pady=4)
+            self.sampai_entry = DateEntry(frm, **cal_opts)
+            self.sampai_entry.set_date(today)
+            self.sampai_entry.grid(row=5, column=1, sticky="w", pady=4)
+            tk.Label(frm, text="(klik kotak tanggal untuk memilih dari kalender)",
+                     font=("Segoe UI", 8), fg="#888").grid(row=6, column=0, columnspan=3, sticky="w")
+        else:
+            self.dari_var = tk.StringVar(value=awal_default.strftime("%d/%m/%Y"))
+            tk.Entry(frm, textvariable=self.dari_var, width=16).grid(row=4, column=1, sticky="w", pady=4)
+            self.sampai_var = tk.StringVar(value=today.strftime("%d/%m/%Y"))
+            tk.Entry(frm, textvariable=self.sampai_var, width=16).grid(row=5, column=1, sticky="w", pady=4)
+            tk.Label(frm, text="(format: HARI/BULAN/TAHUN, contoh 01/01/2024)",
+                     font=("Segoe UI", 8), fg="#888").grid(row=6, column=0, columnspan=3, sticky="w")
 
         # Sensitivitas (label & pilihan berubah menurut mode)
         self.tol_label = tk.Label(frm, text="Ambang anomali (selisih HPP minimal):", anchor="w")
@@ -107,9 +142,9 @@ class App:
         self.root.after(120, self._poll)
 
     # ---- pilihan ambang per mode ----
-    HPP_OPTS = ["30%  (lebih teliti, banyak noise)", "50%  (disarankan)",
-                "70%  (paling parah saja)", "90%  (hampir pasti bug)"]
-    HPP_MAP = {"30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}
+    HPP_OPTS = ["0.1%  (super teliti, semua selisih)", "30%  (lebih teliti, banyak noise)",
+                "50%  (disarankan)", "70%  (paling parah saja)", "90%  (hampir pasti bug)"]
+    HPP_MAP = {"0.1": 0.001, "30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}
     SAT_OPTS = ["40%  (lebih teliti, banyak noise)", "60%  (disarankan)",
                 "80%  (paling parah saja)"]
     SAT_MAP = {"40": 0.40, "60": 0.60, "80": 0.80}
@@ -118,7 +153,7 @@ class App:
         if self.mode_var.get() == "HPP":
             self.tol_label.config(text="Ambang anomali (selisih HPP minimal):")
             self.tol_combo["values"] = self.HPP_OPTS
-            self.tol_var.set(self.HPP_OPTS[1])   # 50%
+            self.tol_var.set(self.HPP_OPTS[2])   # 50%
         else:
             self.tol_label.config(text="Ambang (selisih harga jual minimal):")
             self.tol_combo["values"] = self.SAT_OPTS
@@ -128,6 +163,8 @@ class App:
         d = filedialog.askdirectory(title="Pilih folder yang berisi JUAL.DBF")
         if d:
             self.folder_var.set(d)
+            self.cfg["folder"] = d
+            save_config(self.cfg)
 
     def set_status(self, msg):
         self.q.put(("status", msg))
@@ -143,14 +180,22 @@ class App:
                                  f"Tidak menemukan STOK.DBF di:\n{folder}\n\nButuh JUAL.DBF DAN STOK.DBF.")
             return
         try:
-            d1 = parse_tanggal(self.dari_var.get())
-            d2 = parse_tanggal(self.sampai_var.get())
+            if HAS_CALENDAR:
+                d1 = dt.datetime.combine(self.dari_entry.get_date(), dt.time())
+                d2 = dt.datetime.combine(self.sampai_entry.get_date(), dt.time())
+            else:
+                d1 = parse_tanggal(self.dari_var.get())
+                d2 = parse_tanggal(self.sampai_var.get())
         except ValueError as e:
             messagebox.showerror("Tanggal salah", str(e))
             return
         if d1 > d2:
             messagebox.showerror("Tanggal salah", "Tanggal MULAI tidak boleh setelah tanggal SAMPAI.")
             return
+
+        # folder valid -> simpan supaya tidak perlu pilih ulang lain kali
+        self.cfg["folder"] = folder
+        save_config(self.cfg)
 
         mode = self.mode_var.get()
         key = self.tol_var.get().split("%")[0].strip()

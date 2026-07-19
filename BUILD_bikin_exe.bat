@@ -16,11 +16,11 @@ if errorlevel 1 (
 )
 echo [1/2] Memasang komponen yang dibutuhkan...
 python -m pip install --upgrade pip
-python -m pip install pandas dbfread openpyxl pyinstaller numpy
+python -m pip install pandas dbfread openpyxl pyinstaller numpy tkcalendar
 if errorlevel 1 ( echo [!] Gagal memasang komponen. & pause & exit /b )
 echo.
 echo [2/2] Membuat file EXE (bisa makan beberapa menit)...
-python -m PyInstaller --onefile --windowed --name "DeteksiAnomali" DeteksiAnomali.py
+python -m PyInstaller --onefile --windowed --name "DeteksiAnomali" --hidden-import babel.numbers DeteksiAnomali.py
 if errorlevel 1 ( echo [!] Build gagal. & pause & exit /b )
 echo.
 echo ==================================================
