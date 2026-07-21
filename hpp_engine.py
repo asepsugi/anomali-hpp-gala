@@ -21,6 +21,7 @@ import pandas as pd
 from dbfread import DBF
 
 MIN_ROWS_MEDIAN = 3   # minimal transaksi barang agar median dipakai; kurang dari ini pakai master
+WINDOW_REF = '180D'   # jendela WAKTU MUNDUR utk patokan harga pokok sadar-waktu (trailing)
 
 
 def _load_dbf(path):
@@ -61,42 +62,54 @@ def detect_anomalies(db_folder, date_from, date_to, tolerance=0.50, progress=Non
     stok = _load_dbf(os.path.join(db_folder, 'STOK.DBF'))
     basecost, factor = _build_master(stok)
 
-    say("Menyaring periode ...")
-    d = jual[(jual['TANGGAL'] >= date_from) & (jual['TANGGAL'] <= date_to)].copy()
-    nf = d['NOFAKTUR'].astype(str).str.strip().str.upper()
-    d = d[~nf.str.startswith(('R', 'T'))]
-    if len(d) == 0:
-        return d, {'periode': (date_from, date_to), 'total_baris': 0, 'total_anomali': 0,
-                   'hampir_pasti': 0, 'satuan_tak_dikenal': 0}
+    say("Menyiapkan seluruh riwayat penjualan ...")
+    # Patokan harga dipelajari dari SELURUH riwayat; periode terpilih hanya menyaring baris
+    # yang dilaporkan (spt detektor satuan) -> periode pendek tak menyembunyikan anomali.
+    hist = jual[~jual['NOFAKTUR'].astype(str).str.strip().str.upper().str.startswith(('R', 'T'))].copy()
+    hist = hist.sort_values('TANGGAL').reset_index(drop=True)
+    hist['SATUAN'] = hist['SATUAN'].astype(str).str.strip()
+    isis = pd.to_numeric(hist['ISISATUAN'], errors='coerce')
+    juml = pd.to_numeric(hist['JUMLAH'], errors='coerce')
+    hb = pd.to_numeric(hist['HARGABELI'], errors='coerce')
+    hist['FAKTOR'] = [factor.get((k, s), np.nan) for k, s in zip(hist['KODEBRG'], hist['SATUAN'])]
 
     say("Menghitung HPP (seperti tampilan aplikasi) ...")
-    d['SATUAN'] = d['SATUAN'].astype(str).str.strip()
-    isis = pd.to_numeric(d['ISISATUAN'], errors='coerce')
-    juml = pd.to_numeric(d['JUMLAH'], errors='coerce')
-    hb = pd.to_numeric(d['HARGABELI'], errors='coerce')
-    d['HPP_LAYAR'] = np.where(isis != juml,
-                              np.where(isis != 0, hb / isis, np.nan),
-                              np.where(juml != 0, hb / juml, np.nan))
-    d['FAKTOR'] = [factor.get((k, s), np.nan) for k, s in zip(d['KODEBRG'], d['SATUAN'])]
-    d['BASIS'] = d['HPP_LAYAR'] / d['FAKTOR']
+    # Formula HPP layar aplikasi = HARGABELI/ISISATUAN (bila ISISATUAN<>JUMLAH) else HARGABELI/JUMLAH.
+    # CATATAN (sudah diselidiki): utk baris satuan-tingkat, HARGABELI mayoritas (74%) tersimpan
+    # sebagai TOTAL -> formula ini benar. Sebagian kecil (3%, mis. LABEL KOALA) tersimpan
+    # per-satuan-dasar sehingga bisa jadi false positive; ini TIDAK dikoreksi lewat formula karena
+    # penyimpanan HARGABELI tak konsisten & tak bisa dibedakan andal dari data.
+    hist['HPP_LAYAR'] = np.where(isis != juml,
+                                 np.where(isis != 0, hb / isis, np.nan),
+                                 np.where(juml != 0, hb / juml, np.nan))
+    hist['BASIS'] = hist['HPP_LAYAR'] / hist['FAKTOR']
 
-    say("Menentukan HPP yang benar (master x konversi) ...")
-    med = d.groupby('KODEBRG')['BASIS'].transform('median')
-    cnt = d.groupby('KODEBRG')['BASIS'].transform('count')
-    master_arr = pd.Series([basecost.get(k, np.nan) for k in d['KODEBRG']], index=d.index)
-    d['REF_DASAR'] = np.where(cnt >= MIN_ROWS_MEDIAN, med, master_arr)
-    d['HPP_BENAR'] = (d['REF_DASAR'] * d['FAKTOR']).round(0)
-    d['HPP_LAYAR'] = d['HPP_LAYAR'].round(0)
-    d['DEV_PCT'] = np.where(d['HPP_BENAR'] > 0,
-                            ((d['HPP_LAYAR'] - d['HPP_BENAR']).abs() / d['HPP_BENAR'] * 100).round(1),
-                            np.nan)
-    d['RASIO'] = np.where(d['HPP_BENAR'] > 0, (d['HPP_LAYAR'] / d['HPP_BENAR']).round(2), np.nan)
-    qty_jual = np.where(d['FAKTOR'] > 0, juml / d['FAKTOR'], juml)
-    d['DAMPAK_RL'] = ((d['HPP_BENAR'] - d['HPP_LAYAR']) * qty_jual).round(0)
+    say("Menentukan HPP yang benar (patokan sadar-waktu) ...")
+    # REF_DASAR = harga pokok per satuan dasar yang BERLAKU saat tanggal faktur = median BASIS
+    # barang tsb dlm jendela WAKTU MUNDUR (trailing) sblm/saat tanggal itu. Tahan naik/turun
+    # harga antar batch (mis. LOOSE LEAF A5: Jan 2024 batch 6.250, bukan 3.250 rata2 sepanjang masa).
+    def _trail(g):
+        r = g.rolling(WINDOW_REF, on='TANGGAL', min_periods=MIN_ROWS_MEDIAN)['BASIS'].median()
+        return pd.Series(r.values, index=g.index)
+    hist['REF_TL'] = hist.groupby('KODEBRG', group_keys=False)[['TANGGAL', 'BASIS']].apply(_trail)
+    # fallback bila jendela mundur tak cukup sampel: median seluruh riwayat, lalu master
+    med_all = hist.groupby('KODEBRG')['BASIS'].transform('median')
+    cnt_all = hist.groupby('KODEBRG')['BASIS'].transform('count')
+    master_arr = pd.Series([basecost.get(k, np.nan) for k in hist['KODEBRG']], index=hist.index)
+    fb = pd.Series(np.where(cnt_all >= MIN_ROWS_MEDIAN, med_all, master_arr), index=hist.index)
+    hist['REF_DASAR'] = hist['REF_TL'].where(hist['REF_TL'].notna(), fb)
+    hist['HPP_BENAR'] = (hist['REF_DASAR'] * hist['FAKTOR']).round(0)
+    hist['HPP_LAYAR'] = hist['HPP_LAYAR'].round(0)
+    hist['DEV_PCT'] = np.where(hist['HPP_BENAR'] > 0,
+                               ((hist['HPP_LAYAR'] - hist['HPP_BENAR']).abs() / hist['HPP_BENAR'] * 100).round(1),
+                               np.nan)
+    hist['RASIO'] = np.where(hist['HPP_BENAR'] > 0, (hist['HPP_LAYAR'] / hist['HPP_BENAR']).round(2), np.nan)
+    qty_jual = np.where(hist['FAKTOR'] > 0, juml / hist['FAKTOR'], juml)
+    hist['DAMPAK_RL'] = ((hist['HPP_BENAR'] - hist['HPP_LAYAR']) * qty_jual).round(0)
 
     # Klasifikasi sebab: apakah angka pokok sebenarnya masih bisa dipulihkan dari data,
     # atau memang harga pokoknya salah.
-    ref = d['REF_DASAR']
+    ref = hist['REF_DASAR']
     tol_match = 0.15
     def _close(x):
         return (ref > 0) & x.notna() & ((x - ref).abs() / ref <= tol_match)
@@ -107,15 +120,21 @@ def detect_anomalies(db_folder, date_from, date_to, tolerance=0.50, progress=Non
     # Baris seperti ini PERLU koreksi HPP, jadi jangan dicap "biaya benar".
     # (JUMLAH lebih BESAR dari tersirat = label satuan salah tapi jumlah dasar benar -> tetap
     #  boleh "TOTAL BENAR"; kalau biayanya beneran salah pun akan jatuh ke HARGA POKOK SALAH.)
-    exp_juml = isis * d['FAKTOR']
-    undercount = d['FAKTOR'].notna() & (exp_juml > 0) & (juml < exp_juml * 0.98 - 0.5)
+    exp_juml = isis * hist['FAKTOR']
+    undercount = hist['FAKTOR'].notna() & (exp_juml > 0) & (juml < exp_juml * 0.98 - 0.5)
     qty_ok = ~undercount
     c_total = qty_ok & _close(hb / juml_safe)  # HARGABELI = total utk JUMLAH -> total benar, satuan salah
     c_base = qty_ok & _close(hb)               # HARGABELI = harga pokok dasar tapi di baris satuan tinggi
-    c_sell = qty_ok & _close(hb / d['FAKTOR'])  # HARGABELI = per satuan jual
-    d['SEBAB'] = np.where(c_total, 'TOTAL BENAR (satuan salah)',
-                   np.where(c_base | c_sell, 'NILAI POKOK BENAR (salah baris satuan)',
-                            'HARGA POKOK SALAH'))
+    c_sell = qty_ok & _close(hb / hist['FAKTOR'])  # HARGABELI = per satuan jual
+    hist['SEBAB'] = np.where(c_total, 'TOTAL BENAR (satuan salah)',
+                     np.where(c_base | c_sell, 'NILAI POKOK BENAR (salah baris satuan)',
+                              'HARGA POKOK SALAH'))
+
+    say("Menyaring periode yang dilaporkan ...")
+    d = hist[(hist['TANGGAL'] >= date_from) & (hist['TANGGAL'] <= date_to)]
+    if len(d) == 0:
+        return d, {'periode': (date_from, date_to), 'total_baris': 0, 'total_anomali': 0,
+                   'hampir_pasti': 0, 'harga_pokok_salah': 0, 'satuan_tak_dikenal': 0}
 
     known = d['FAKTOR'].notna() & (d['HPP_BENAR'] > 0)
     anom = d[known & (d['DEV_PCT'] > tolerance * 100)].copy()

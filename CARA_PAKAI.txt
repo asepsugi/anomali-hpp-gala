@@ -1,18 +1,22 @@
 =========================================================
-  APLIKASI DETEKSI ANOMALI  (HPP + Satuan, satu aplikasi)
+  APLIKASI DETEKSI ANOMALI  (HPP + Satuan + HARGABELI, satu aplikasi)
 =========================================================
 
-Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
-  1. Anomali HPP     -> HPP yang salah hitung di laporan Laba.
-  2. Kesalahan Satuan-> salah pilih satuan (PCS/LSN/DUS) saat input jual.
+Satu aplikasi, tiga jenis pemeriksaan (dipilih saat dipakai):
+  1. Anomali HPP        -> HPP yang salah hitung di laporan Laba.
+  2. Kesalahan Satuan   -> salah pilih satuan (PCS/LSN/DUS) saat input jual.
+  3. HARGABELI Salah-Satuan -> HARGABELI diisi per satuan DASAR di baris satuan
+        TINGKAT (BALL/LSN/RIM/DUS) -> HPP kekecilan, laba kebesaran. Daftar
+        pembenahan cara input di aplikasi kasir.
 
 --- A. MEMBUAT FILE .EXE (sekali, di komputer WINDOWS) ---
   PENTING: build harus di Windows. Build di Mac menghasilkan app Mac, bukan .exe.
   1. Pasang Python (python.org, centang "Add to PATH").
-  2. Taruh 4 file dalam 1 folder:
+  2. Taruh 5 file dalam 1 folder:
         DeteksiAnomali.py
         hpp_engine.py
         DeteksiAnomaliSatuan.py
+        LaporanHargabeliSatuan.py
         BUILD_bikin_exe.bat
      (BUILD_bikin_exe.bat sudah otomatis memasang komponen kalender tkcalendar.)
   3. Dobel-klik BUILD_bikin_exe.bat, tunggu selesai.
@@ -25,16 +29,17 @@ Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
   2. Folder database: arahkan ke lokasi JUAL.DBF & STOK.DBF (biasanya Z:\).
      (Aplikasi butuh KEDUANYA: JUAL.DBF dan STOK.DBF.)
   3. Pilih JENIS PEMERIKSAAN:
-        - Anomali HPP, atau
-        - Kesalahan Satuan
-     (Pilihan "Ambang" otomatis menyesuaikan jenis yang dipilih.)
+        - Anomali HPP,
+        - Kesalahan Satuan, atau
+        - HARGABELI Salah-Satuan
+     (Pilihan "Ambang" otomatis menyesuaikan; mode HARGABELI tidak pakai ambang.)
   4. Tanggal MULAI & SAMPAI: klik kotak tanggal, pilih dari kalender.
      (Folder database yang terakhir dipakai otomatis tersimpan, tidak perlu
       pilih ulang tiap buka aplikasi.)
-  5. Pilih ambang (default sudah disarankan). Klik ANALISA.
-  6. Hasil tersimpan di sub-folder "output" (sejajar aplikasi/skrip) dan
-     otomatis terbuka. Nama file dibedakan: Anomali_HPP_... atau Anomali_Satuan_...
-     (Untuk .exe: folder output ada di sebelah DeteksiAnomali.exe.)
+  5. Pilih ambang bila perlu (default sudah disarankan). Klik ANALISA.
+  6. Hasil tersimpan di sub-folder "output" (sejajar aplikasi/skrip) dan otomatis
+     terbuka. Nama file dibedakan: Anomali_HPP_... / Anomali_Satuan_... /
+     Laporan_HargabeliSatuan_...  (Untuk .exe: folder output di sebelah .exe.)
 
 =========================================================
   C1. MEMBACA HASIL - ANOMALI HPP
@@ -90,4 +95,22 @@ Satu aplikasi, dua jenis pemeriksaan (dipilih saat dipakai):
 
   Barang jasa/non-stok (mis. ONGKOS) dikecualikan karena harganya wajar berubah;
   jumlahnya ditulis di sheet Ringkasan.
+
+=========================================================
+  C3. MEMBACA HASIL - HARGABELI SALAH-SATUAN
+=========================================================
+  Masalah: pada baris jual satuan TINGKAT (BALL/LSN/RIM/DUS), kolom HARGABELI
+  diisi PER-SATUAN-DASAR (mis. per PAK) bukan total. Akibatnya HPP tercatat
+  kekecilan -> laba di laporan jadi kebesaran. Perlu dibetulkan cara inputnya.
+
+  Sheet "Per Barang" (prioritas pembenahan) & "Detail" (per faktur). Kolom:
+    HARGABELI_TERTULIS   = HARGABELI yang tercatat (tampak per satuan dasar)
+    HRG_POKOK_DASAR      = harga pokok per satuan dasar (dari riwayat)
+    HARGABELI_SEHARUSNYA = perkiraan HARGABELI benar utk baris itu (dasar x JUMLAH)
+    HPP_BENAR_PER_SAT    = harga pokok per satuan jual (dasar x faktor)
+    LABA_LEBIH_CATAT     = perkiraan laba ter-overstate (KASAR, utk prioritas)
+    NAMAUSER             = kasir yang menginput (untuk menelusuri pola)
+
+  Catatan: ini daftar PEMBENAHAN INPUT, bukan bug hitung. Di layar aplikasi HPP
+  bisa tampak benar, tapi angka HARGABELI yang TERSIMPAN keliru. DAMPAK kasar.
 =========================================================

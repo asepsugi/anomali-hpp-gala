@@ -4,9 +4,11 @@ Deteksi Anomali - Aplikasi GUI (gabungan)
 Owner tinggal: pilih folder database -> pilih jenis cek -> pilih tanggal -> klik ANALISA.
 Hasil keluar sebagai file Excel dan langsung terbuka.
 
-Dua jenis cek dalam satu aplikasi:
-  1. HPP    -> hpp_engine.detect_anomalies (HPP salah hitung di laporan Laba)
-  2. SATUAN -> DeteksiAnomaliSatuan.detect_unit_errors (salah pilih satuan saat input)
+Tiga jenis cek dalam satu aplikasi:
+  1. HPP      -> hpp_engine.detect_anomalies (HPP salah hitung di laporan Laba)
+  2. SATUAN   -> DeteksiAnomaliSatuan.detect_unit_errors (salah pilih satuan saat input)
+  3. HARGABELI-> LaporanHargabeliSatuan.laporan_hargabeli (HARGABELI diisi per satuan dasar
+                 di baris satuan tingkat -> HPP understated; daftar pembenahan input)
 """
 import os
 import sys
@@ -20,10 +22,34 @@ from tkinter import ttk, filedialog, messagebox
 import pandas as pd
 import hpp_engine
 import DeteksiAnomaliSatuan as satuan_engine
+import LaporanHargabeliSatuan as hb_engine
 
 try:
     from tkcalendar import DateEntry   # widget kalender (opsional)
     HAS_CALENDAR = True
+
+    class DateEntryFix(DateEntry):
+        """DateEntry dengan perbaikan bug klik tombol < / > di Windows.
+
+        tkcalendar menampilkan kalender di popup 'overrideredirect' lalu hanya
+        memanggil focus_set(). Di Windows, popup borderless tidak benar-benar
+        menjadi window aktif, sehingga KLIK PERTAMA pada tombol navigasi bulan/
+        tahun (< dan >) cuma dipakai untuk 'mengaktifkan' window dan tidak sampai
+        ke tombol -> harus klik dua kali / buka-tutup selektor dulu.
+
+        Solusi: paksa aktivasi OS (focus_force) tepat saat popup dibuka, agar
+        klik pertama langsung diterima tombol. Aman di Windows/Mac/Linux.
+        """
+        def drop_down(self):
+            opening = not self._calendar.winfo_ismapped()
+            super().drop_down()
+            if opening:
+                # popup baru saja dibuka -> rebut fokus tingkat OS.
+                # after_idle: dijalankan setelah window selesai di-map, supaya
+                # focus_force benar-benar mengaktifkan popup (Windows).
+                self._top_cal.after_idle(self._calendar.focus_force)
+
+    DateEntry = DateEntryFix
 except Exception:
     HAS_CALENDAR = False               # fallback: ketik manual
 
@@ -71,13 +97,13 @@ class App:
         self.q = queue.Queue()
         self.cfg = load_config()
         root.title(APP_TITLE)
-        root.geometry("560x500")
+        root.geometry("560x530")
         root.resizable(False, False)
 
         # Judul
         head = tk.Label(root, text="DETEKSI ANOMALI", font=("Segoe UI", 16, "bold"), fg="#1F4E78")
         head.pack(pady=(16, 2))
-        tk.Label(root, text="Cari HPP salah hitung atau kesalahan input satuan",
+        tk.Label(root, text="HPP salah hitung, kesalahan satuan, atau HARGABELI salah-satuan",
                  font=("Segoe UI", 9), fg="#555").pack()
 
         frm = tk.Frame(root)
@@ -100,6 +126,8 @@ class App:
                        variable=self.mode_var, value="HPP", command=self._on_mode).pack(anchor="w")
         tk.Radiobutton(modefrm, text="Kesalahan Satuan (salah pilih satuan saat input)",
                        variable=self.mode_var, value="SATUAN", command=self._on_mode).pack(anchor="w")
+        tk.Radiobutton(modefrm, text="HARGABELI Salah-Satuan (HARGABELI diisi per satuan dasar)",
+                       variable=self.mode_var, value="HARGABELI", command=self._on_mode).pack(anchor="w")
 
         # Tanggal
         today = dt.date.today()
@@ -158,14 +186,19 @@ class App:
     SAT_MAP = {"0.1": 0.001, "40": 0.40, "60": 0.60, "80": 0.80}
 
     def _on_mode(self):
-        if self.mode_var.get() == "HPP":
+        m = self.mode_var.get()
+        if m == "HPP":
             self.tol_label.config(text="Ambang anomali (selisih HPP minimal):")
-            self.tol_combo["values"] = self.HPP_OPTS
+            self.tol_combo.config(state="readonly", values=self.HPP_OPTS)
             self.tol_var.set(self.HPP_OPTS[2])   # 50%
-        else:
+        elif m == "SATUAN":
             self.tol_label.config(text="Ambang (selisih harga jual minimal):")
-            self.tol_combo["values"] = self.SAT_OPTS
+            self.tol_combo.config(state="readonly", values=self.SAT_OPTS)
             self.tol_var.set(self.SAT_OPTS[2])   # 60%
+        else:  # HARGABELI: laporan tak pakai ambang
+            self.tol_label.config(text="(mode ini tidak memakai ambang)")
+            self.tol_var.set("")
+            self.tol_combo.config(values=[], state="disabled")
 
     def pilih_folder(self):
         d = filedialog.askdirectory(title="Pilih folder yang berisi JUAL.DBF")
@@ -206,8 +239,11 @@ class App:
         save_config(self.cfg)
 
         mode = self.mode_var.get()
-        key = self.tol_var.get().split("%")[0].strip()
-        tol = (self.HPP_MAP if mode == "HPP" else self.SAT_MAP)[key]
+        if mode == "HARGABELI":
+            tol = None   # laporan HARGABELI tak pakai ambang
+        else:
+            key = self.tol_var.get().split("%")[0].strip()
+            tol = (self.HPP_MAP if mode == "HPP" else self.SAT_MAP)[key]
 
         self.btn.config(state="disabled")
         self.bar.start(12)
@@ -227,7 +263,7 @@ class App:
                 out = os.path.join(out_dir, f"Anomali_HPP_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
                 hpp_engine.write_report(anom, ring, out)
                 self.q.put(("done_hpp", (out, ring)))
-            else:
+            elif mode == "SATUAN":
                 res, ring = satuan_engine.detect_unit_errors(
                     folder, pd.Timestamp(d1), pd.Timestamp(d2), dev_threshold=tol,
                     progress=self.set_status)
@@ -235,6 +271,13 @@ class App:
                 out = os.path.join(out_dir, f"Anomali_Satuan_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
                 satuan_engine.write_report(res, ring, out)
                 self.q.put(("done_satuan", (out, ring)))
+            elif mode == "HARGABELI":
+                per, detail, ring = hb_engine.laporan_hargabeli(
+                    folder, pd.Timestamp(d1), pd.Timestamp(d2), progress=self.set_status)
+                self.set_status("Menulis file Excel ...")
+                out = os.path.join(out_dir, f"Laporan_HargabeliSatuan_{d1:%Y%m%d}-{d2:%Y%m%d}_{stamp}.xlsx")
+                hb_engine.write_report(per, detail, ring, out)
+                self.q.put(("done_hargabeli", (out, ring)))
         except Exception as e:
             self.q.put(("error", str(e)))
 
@@ -276,6 +319,18 @@ class App:
                            f"  - SALAH SATUAN (yakin)     : {ring['salah_satuan']:,}\n"
                            f"  - HARGA JANGGAL (cek manual): {ring['harga_janggal']:,}\n"
                            f"Barang jasa/non-stok dikecualikan: {ring['jasa_dikecualikan']:,}\n\n"
+                           f"File disimpan di:\n{out}\n\nBuka sekarang?")
+                    if messagebox.askyesno("Selesai", msg):
+                        self._open_file(out)
+                elif kind == "done_hargabeli":
+                    out, ring = payload
+                    self.bar.stop()
+                    self.btn.config(state="normal")
+                    self.status.config(text=f"Selesai. {ring['total_transaksi']:,} transaksi terindikasi.")
+                    msg = (f"Laporan HARGABELI Salah-Satuan selesai.\n\n"
+                           f"Transaksi terindikasi   : {ring['total_transaksi']:,}\n"
+                           f"Barang terdampak         : {ring['total_barang']:,}\n"
+                           f"Perkiraan laba ter-overstate: Rp {ring['laba_lebih_catat']:,.0f}\n\n"
                            f"File disimpan di:\n{out}\n\nBuka sekarang?")
                     if messagebox.askyesno("Selesai", msg):
                         self._open_file(out)

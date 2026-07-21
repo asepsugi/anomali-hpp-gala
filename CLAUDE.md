@@ -79,12 +79,26 @@ HPP yang BENAR = harga pokok master x faktor konversi satuan.
 3. Detektor satuan versi lama membandingkan harga faktur dgn harga jual MASTER TERKINI
    -> banyak false positive saat harga berubah. Sudah diganti dgn median riwayat (lihat
    Detektor 2). File engine satuan lama (berbasis HARGAJUAL1/2/3) sudah TIDAK dipakai.
+4. "HPP_LAYAR utk baris satuan-tingkat = HARGABELI x faktor (bukan HARGABELI/ISISATUAN)"
+   -> SALAH sbg aturan umum. Dipicu 1 contoh (LABEL KOALA BALL: app tampil 73.750 =
+   2.950 x 25). Investigasi 20.840 baris satuan-tingkat: HARGABELI tersimpan sebagai TOTAL
+   pada ~74% (formula HARGABELI/ISISATUAN benar), hanya ~3% per-satuan-dasar (spt LABEL
+   KOALA). Mengubah formula ke HARGABELI x faktor meledakkan anomali 10x (381 -> ~3.540 di
+   2024). DIBATALKAN: HARGABELI tak konsisten & tak bisa dibedakan andal dari data. LABEL
+   KOALA BALL tetap ter-flag tapi berlabel "NILAI POKOK BENAR" (benign, bukan perlu koreksi).
 
 ## Detektor 1: anomali HPP (`hpp_engine.py :: detect_anomalies`)
-- HPP_LAYAR = formula aplikasi di atas.
+- HPP_LAYAR = formula aplikasi di atas (HARGABELI/ISISATUAN bila beda, else HARGABELI/JUMLAH).
 - FAKTOR dari master (dasar=1, SATUAN2->ISISAT2, SATUAN3->ISISAT3).
-- BASIS = HPP_LAYAR/FAKTOR. REF_DASAR = median BASIS per barang sepanjang periode
-  (>=3 baris) else harga pokok master. (Median dipilih agar tahan perubahan harga.)
+- BASIS = HPP_LAYAR/FAKTOR.
+- REF_DASAR = SADAR-WAKTU: median BASIS per barang dlm jendela WAKTU MUNDUR (trailing
+  `WINDOW_REF`=180 hari) sebelum/saat tanggal faktur, DIPELAJARI dari SELURUH riwayat
+  (bukan hanya periode terpilih; periode hanya menyaring baris yg dilaporkan). Fallback:
+  bila jendela mundur <3 sampel -> median seluruh riwayat, lalu harga pokok master.
+  Alasan: harga pokok berubah antar-batch; median seluruh masa salah-tuduh penjualan di
+  masa harga tinggi. Contoh terbukti: LOOSE LEAF A5 (faktur 2401-000546/000605, Jan 2024)
+  batch saat itu 6.250 (bukan 3.250 rata2 sepanjang masa) -> dulu HAMPIR PASTI, kini lolos.
+  (Perubahan ini count-neutral: 2024 ~385 anomali, hampir sama dgn 381 versi median-periode.)
 - HPP_BENAR = REF_DASAR x FAKTOR. DEV_PCT = |HPP_LAYAR-HPP_BENAR|/HPP_BENAR.
 - Anomali bila DEV_PCT > ambang (default 50%). KEYAKINAN: >90% HAMPIR PASTI, >70% TINGGI.
 - SEBAB: TOTAL BENAR (HARGABELI/JUMLAH~ref) / NILAI POKOK BENAR (HARGABELI~ref) /
@@ -136,10 +150,23 @@ Satu GUI, dua mode (radio button): "Anomali HPP" dan "Kesalahan Satuan". Mengimp
 - Output Excel ke sub-folder `output/` di sebelah program (`sys.frozen` -> folder .exe,
   else folder skrip), nama file `Anomali_HPP_...` / `Anomali_Satuan_...`, lalu dibuka.
 
+## Laporan tambahan: HARGABELI salah-satuan (`LaporanHargabeliSatuan.py`)
+Bukan detektor hitung, tapi daftar PEMBENAHAN INPUT untuk aplikasi kasir. Menemukan baris
+jual satuan-tingkat (BALL/LSN/RIM/DUS) yang HARGABELI-nya diisi PER-SATUAN-DASAR (mis. per
+PAK) bukan total -> HPP understated, laba ter-overstate. Ini persis kasus "3% HARGABELI
+per-satuan-dasar" (lihat Sejarah kesimpulan salah #4); di layar app HPP tampak benar tapi
+angka HARGABELI tersimpan keliru. Deteksi: REFBASE (harga pokok/satuan dasar dari baris
+satuan dasar, median riwayat) vs HARGABELI; ditandai bila HARGABELI ~ REFBASE (1x) padahal
+mestinya ~ REFBASE x JUMLAH. Output Excel: Ringkasan + Per Barang + Detail. CLI:
+`python3 LaporanHargabeliSatuan.py [folder] [mulai] [sampai]` (tanpa tanggal = seluruh data).
+Skala terukur (seluruh data): ~691 transaksi, ~142 barang, perkiraan laba ter-overstate
+~Rp 135,8 jt (top: LABEL KOALA BALL, BUKU GAMBAR KECIL, SPIDOL W.B). DAMPAK kasar.
+
 ## File project
 - `hpp_engine.py`, `DeteksiAnomaliSatuan.py` — engine murni (bisa diuji headless).
 - `DeteksiAnomali.py` — GUI tkinter GABUNGAN (HPP + Satuan). Ini yang dibuild jadi .exe.
 - `analisa.py` — CLI headless (lihat memory: `python3 analisa.py <mulai> <sampai> [ambang]`).
+- `LaporanHargabeliSatuan.py` — laporan HARGABELI salah-satuan (lihat bagian di atas).
 - `BUILD_bikin_exe.bat`, `requirements.txt`, `CARA_PAKAI.txt`.
 - `data/` — salinan DBF untuk pengembangan (JANGAN tulis balik; ini read-only source).
 - `serba-indah-audit/` — arsip sesi audit (sumber merge; boleh dihapus).
