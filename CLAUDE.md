@@ -132,13 +132,6 @@ dev_threshold=0.60, match_tol=0.25, progress=None)` + `write_report(res, ring, o
 - Anomali bila HARGAJUAL menyimpang > ambang (default 60%) dari harga lazim satuan
   diinput; kalau cocok satuan lain (match_tol 25%) -> SALAH SATUAN, kalau tidak ->
   HARGA JANGGAL (cek manual). Output punya kolom DEV_PCT.
-- GUARD "satuan diinput sudah plausibel": bila HARGAJUAL masih dekat (<= match_tol 25%)
-  dgn harga lazim satuan yg DIINPUT, baris TIDAK di-flag (satuan itu wajar). Lantai efektif
-  jadi max(dev_threshold, match_tol=25%), jadi ambang < 25% berperilaku spt 25% & default
-  60% tak berubah. Mencegah false positive di ambang rendah: mis. BP STANDAR BIG GEL 07
-  (faktur 2511-000958, jual 63.000 vs lazim PAK 62.500 = 0,8%) dulu di ambang 0,1% salah-
-  vonis "seharusnya LSN 57.000"; kini tidak muncul di ambang mana pun. (Di 0,1% temuan Nov
-  2025 turun 1.975 -> 69, salah-satuan asli spt 2601-000810 tetap kena.)
 - `MIN_HIST=2`: barang+satuan dengan <2 transaksi tidak dinilai (patokan tak layak).
 - Barang jasa/non-stok (ONGKOS, NONSTOK, SERVICE) dikecualikan.
 - Batas: andal utk faktor besar (PAK 250, RIM 500); rawan utk faktor kecil (PCS<->PAK
@@ -153,7 +146,7 @@ Satu GUI, dua mode (radio button): "Anomali HPP" dan "Kesalahan Satuan". Mengimp
   ketik-manual bila tkcalendar tak terpasang. Butuh `--hidden-import babel.numbers`
   saat build PyInstaller.
 - Pilihan ambang berubah menurut mode: HPP = 0.1/30/50/70/90% (default 50%),
-  Satuan = 25/40/60/80% (default 60%; <25% tak berguna krn guard match_tol),
+  Satuan = 0.1/40/60/80% (default 60%),
   HARGABELI = tak pakai ambang (combobox dinonaktifkan).
 - Output Excel ke sub-folder `output/` di sebelah program (`sys.frozen` -> folder .exe,
   else folder skrip), nama file `Anomali_HPP_...` / `Anomali_Satuan_...`, lalu dibuka.

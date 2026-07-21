@@ -113,13 +113,6 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
         dev = abs(hj - own) / own
         if dev <= dev_threshold:
             continue
-        # GUARD: kalau harga jual masih dekat (<= match_tol) dgn harga LAZIM satuan yang
-        # DIINPUT, berarti satuan itu sudah plausibel -> BUKAN masalah satuan, jangan flag.
-        # (Mencegah false positive di ambang rendah: mis. BP STANDAR BIG GEL, jual 63.000
-        #  vs lazim PAK 62.500 = 0,8%, sempat salah-vonis "seharusnya LSN".)
-        # Lantai efektif jadi max(dev_threshold, match_tol); di ambang default 60% tak berubah.
-        if dev <= match_tol:
-            continue
         # tentukan satuan yang seharusnya: utamakan MEDIAN ASLI satuan lain dari riwayat,
         # fallback ke harga_dasar x faktor bila satuan itu tak punya cukup riwayat.
         b = bl.get(k); seharus = ''; hseharus = np.nan
