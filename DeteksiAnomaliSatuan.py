@@ -106,13 +106,28 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
     diperiksa = 0
     for x in rep.itertuples(index=False):
         k = x.KODEBRG; sat = x.SATUAN; hj = x.HJ
+        terdaftar = (k, sat) in isi          # satuan yang diinput ADA di master?
         own = lazim.get((k, sat))
-        if not own or own <= 0 or cnt.get((k, sat), 0) < MIN_HIST:
-            continue
-        diperiksa += 1
-        dev = abs(hj - own) / own
-        if dev <= dev_threshold:
-            continue
+        if terdaftar:
+            # jalur normal: butuh riwayat cukup, lolos ambang, dan bukan "sudah plausibel".
+            if not own or own <= 0 or cnt.get((k, sat), 0) < MIN_HIST:
+                continue
+            diperiksa += 1
+            dev = abs(hj - own) / own
+            if dev <= dev_threshold:
+                continue
+            # GUARD: satuan terdaftar & harga jual masih dekat (<= match_tol) harga lazimnya
+            # -> satuan itu plausibel -> jangan flag. Membuang false positive spt BP STANDAR
+            # BIG GEL (PAK terdaftar, jual 63.000 vs lazim PAK 62.500 = 0,8%).
+            if dev <= match_tol:
+                continue
+        else:
+            # Satuan TIDAK terdaftar di master -> SELALU di-flag, TAK peduli ambang.
+            # Memakai satuan yang tak ada di master = jelas salah input (mis. LEM GLR-50
+            # diinput BOX padahal master cuma PCS/LSN, dipakai 70x). Deviasinya bisa kecil
+            # (riwayat satuan-asing itu konsisten), jadi tak boleh bergantung ke ambang.
+            diperiksa += 1
+            dev = (abs(hj - own) / own) if (own and own > 0) else np.nan
         # tentukan satuan yang seharusnya: utamakan MEDIAN ASLI satuan lain dari riwayat,
         # fallback ke harga_dasar x faktor bila satuan itu tak punya cukup riwayat.
         b = bl.get(k); seharus = ''; hseharus = np.nan
@@ -128,15 +143,20 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
                     best = (s, abs(hj - exp), exp)
         if best:
             seharus, hseharus = best[0], round(best[2], 0)
-        kategori = 'SALAH SATUAN' if seharus else 'HARGA JANGGAL (cek manual)'
+        if not terdaftar:
+            # satuan tak ada di master -> selalu kategori ini (SATUAN_SEHARUSNYA tetap diisi
+            # bila ketemu tebakan satuan yang cocok, mis. BOX -> seharusnya LSN).
+            kategori = 'SATUAN TAK DIKENAL (cek master)'
+        else:
+            kategori = 'SALAH SATUAN' if seharus else 'HARGA JANGGAL (cek manual)'
         out.append({
             'TANGGAL': x.TANGGAL, 'NOFAKTUR': x.NOFAKTUR, 'KODEBRG': k, 'NAMABRG': x.NAMABRG,
             'SATUAN_DIINPUT': sat, 'BANYAK': getattr(x, 'ISISATUAN', np.nan),
             'HARGA_JUAL': round(hj, 0),
-            'HRG_LAZIM_SATUAN_INI': round(own, 0),
+            'HRG_LAZIM_SATUAN_INI': round(own, 0) if (own and own > 0) else '',
             'SATUAN_SEHARUSNYA': seharus,
             'HRG_LAZIM_SEHARUSNYA': hseharus if hseharus == hseharus else '',
-            'DEV_PCT': round(dev * 100, 0),
+            'DEV_PCT': round(dev * 100, 0) if dev == dev else '',
             'KATEGORI': kategori,
             'NAMAUSER': getattr(x, 'NAMAUSER', ''),
         })
@@ -148,7 +168,8 @@ def detect_unit_errors(db_folder, date_from, date_to, dev_threshold=0.60,
         'diperiksa': int(diperiksa),
         'total': int(len(res)),
         'salah_satuan': int((res['KATEGORI'] == 'SALAH SATUAN').sum()) if len(res) else 0,
-        'harga_janggal': int((res['KATEGORI'] != 'SALAH SATUAN').sum()) if len(res) else 0,
+        'harga_janggal': int((res['KATEGORI'] == 'HARGA JANGGAL (cek manual)').sum()) if len(res) else 0,
+        'satuan_tak_dikenal': int((res['KATEGORI'] == 'SATUAN TAK DIKENAL (cek master)').sum()) if len(res) else 0,
         'jasa_dikecualikan': len(excl),
     }
     return res, ring
@@ -164,9 +185,10 @@ def write_report(res, ring, out_path):
         ("DETEKSI KESALAHAN INPUT SATUAN", 12),
         (f"Periode: {df:%d/%m/%Y} s/d {dt:%d/%m/%Y}", 0),
         ("", 0),
-        (f"Baris diperiksa (punya riwayat harga): {ring['diperiksa']:,}", 0),
+        (f"Baris diperiksa: {ring['diperiksa']:,}", 0),
         (f"SALAH SATUAN (harga cocok satuan lain): {ring['salah_satuan']:,}", 0),
         (f"HARGA JANGGAL (perlu cek manual): {ring['harga_janggal']:,}", 0),
+        (f"SATUAN TAK DIKENAL (satuan tak ada di master): {ring.get('satuan_tak_dikenal', 0):,}", 0),
         (f"Barang jasa/non-stok dikecualikan: {ring['jasa_dikecualikan']:,}", 0),
         ("", 0),
         ("Cara baca:", 11),
@@ -178,6 +200,8 @@ def write_report(res, ring, out_path):
         ("SATUAN_SEHARUSNYA    = satuan yang harganya cocok dengan HARGA_JUAL.", 0),
         ("DEV_PCT              = selisih HARGA_JUAL thd harga lazim satuan diinput (%).", 0),
         ("MERAH = SALAH SATUAN (yakin). ORANYE = HARGA JANGGAL (cek manual).", 0),
+        ("BIRU  = SATUAN TAK DIKENAL: satuan diinput TIDAK ADA di master barang -> pasti", 0),
+        ("        salah pilih satuan; muncul di ambang berapa pun. Betulkan input satuannya.", 0),
         ("", 0),
         ("Catatan: patokan harga diambil dari SELURUH riwayat penjualan barang itu", 0),
         ("sendiri (semua tanggal), sehingga harga lama yang konsisten TIDAK dianggap", 0),
@@ -199,9 +223,12 @@ def write_report(res, ring, out_path):
             c = ws2.cell(row=1, column=j, value=h); c.fill = hf; c.font = hfont
             c.alignment = Alignment(horizontal="center"); c.border = bd
         red = PatternFill("solid", fgColor="FFC7CE"); org = PatternFill("solid", fgColor="FFD9A0")
+        blu = PatternFill("solid", fgColor="BDD7EE")
         ki = heads.index('KATEGORI')
         for i, row in enumerate(res.itertuples(index=False), start=2):
-            vals = list(row); fill = red if vals[ki] == 'SALAH SATUAN' else org
+            vals = list(row)
+            kat = vals[ki]
+            fill = red if kat == 'SALAH SATUAN' else (blu if kat == 'SATUAN TAK DIKENAL (cek master)' else org)
             for j, v in enumerate(vals, 1):
                 if hasattr(v, 'strftime'): v = v.strftime('%d/%m/%Y')
                 c = ws2.cell(row=i, column=j, value=v); c.fill = fill; c.border = bd

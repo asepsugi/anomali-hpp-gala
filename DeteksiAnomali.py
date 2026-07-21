@@ -181,6 +181,9 @@ class App:
     HPP_OPTS = ["0.1%  (super teliti, semua selisih)", "30%  (lebih teliti, banyak noise)",
                 "50%  (disarankan)", "70%  (paling parah saja)", "90%  (hampir pasti bug)"]
     HPP_MAP = {"0.1": 0.001, "30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}
+    # Opsi 0.1% SENGAJA dipertahankan untuk mode Satuan (biar owner yang memutuskan
+    # seberapa teliti). Jangan dihapus. Catatan: baris SATUAN TAK DIKENAL tetap muncul
+    # di ambang berapa pun; 0.1% menambah baris satuan-terdaftar ber-deviasi 25-60%.
     SAT_OPTS = ["0.1%  (super teliti, semua selisih)", "40%  (lebih teliti, banyak noise)",
                 "60%  (disarankan)", "80%  (paling parah saja)"]
     SAT_MAP = {"0.1": 0.001, "40": 0.40, "60": 0.60, "80": 0.80}
@@ -314,10 +317,11 @@ class App:
                     self.btn.config(state="normal")
                     self.status.config(text=f"Selesai. {ring['total']:,} kesalahan satuan ditemukan.")
                     msg = (f"Analisa Satuan selesai.\n\n"
-                           f"Baris diperiksa (punya harga satuan): {ring['diperiksa']:,}\n"
+                           f"Baris diperiksa              : {ring['diperiksa']:,}\n"
                            f"Total temuan                 : {ring['total']:,}\n"
                            f"  - SALAH SATUAN (yakin)     : {ring['salah_satuan']:,}\n"
                            f"  - HARGA JANGGAL (cek manual): {ring['harga_janggal']:,}\n"
+                           f"  - SATUAN TAK DIKENAL (tak ada di master): {ring.get('satuan_tak_dikenal', 0):,}\n"
                            f"Barang jasa/non-stok dikecualikan: {ring['jasa_dikecualikan']:,}\n\n"
                            f"File disimpan di:\n{out}\n\nBuka sekarang?")
                     if messagebox.askyesno("Selesai", msg):

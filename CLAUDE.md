@@ -129,10 +129,26 @@ dev_threshold=0.60, match_tol=0.25, progress=None)` + `write_report(res, ring, o
   median seluruh riwayat.
 - "Satuan yg seharusnya" -> diutamakan MEDIAN ASLI satuan lain di riwayat (mis. LSN
   31.500 cocok persis), fallback ke struktur faktor isi x harga dasar bila tak berdata.
-- Anomali bila HARGAJUAL menyimpang > ambang (default 60%) dari harga lazim satuan
-  diinput; kalau cocok satuan lain (match_tol 25%) -> SALAH SATUAN, kalau tidak ->
-  HARGA JANGGAL (cek manual). Output punya kolom DEV_PCT.
-- `MIN_HIST=2`: barang+satuan dengan <2 transaksi tidak dinilai (patokan tak layak).
+- TIGA kategori temuan:
+  1. SALAH SATUAN: satuan TERDAFTAR di master, HARGAJUAL menyimpang > ambang dari harga
+     lazim satuan diinput DAN cocok satuan lain (match_tol 25%). Yakin.
+  2. HARGA JANGGAL (cek manual): satuan TERDAFTAR, menyimpang > ambang, tapi tak cocok
+     satuan mana pun.
+  3. SATUAN TAK DIKENAL (cek master): satuan diinput TIDAK ADA di master barang (mis. LEM
+     GLR-50 diinput BOX padahal master cuma PCS/LSN). SELALU di-flag, TAK peduli ambang,
+     karena memakai satuan tak-terdaftar = pasti salah input. SATUAN_SEHARUSNYA tetap diisi
+     bila ketemu tebakan (BOX -> LSN). Ini menyurface ~329 baris yang DULU jadi blind spot.
+- GUARD "satuan plausibel" HANYA utk satuan TERDAFTAR: bila `(barang,satuan diinput)` ADA
+  di master DAN HARGAJUAL masih dekat (<= match_tol 25%) harga lazim satuan itu -> TIDAK
+  di-flag. Membuang false positive: BP STANDAR BIG GEL (PAK terdaftar, jual 63.000 vs lazim
+  PAK 62.500 = 0,8%). Guard TIDAK berlaku utk satuan tak-terdaftar (lihat kategori 3).
+  Lantai efektif utk satuan terdaftar = max(dev_threshold, match_tol=25%); default 60% tak
+  berubah. (Pelajaran: guard versi awal tanpa syarat "terdaftar" sempat mematikan LEM GLR-50;
+  kini dibedakan lewat keanggotaan satuan di master.)
+- Output punya kolom DEV_PCT. Warna: MERAH=SALAH SATUAN, ORANYE=HARGA JANGGAL, BIRU=SATUAN
+  TAK DIKENAL.
+- `MIN_HIST=2`: barang+satuan TERDAFTAR dengan <2 transaksi tidak dinilai (patokan tak layak;
+  tak berlaku utk satuan tak-terdaftar yang selalu di-flag).
 - Barang jasa/non-stok (ONGKOS, NONSTOK, SERVICE) dikecualikan.
 - Batas: andal utk faktor besar (PAK 250, RIM 500); rawan utk faktor kecil (PCS<->PAK
   isi 2) karena perubahan harga ~2x mirip swap.
@@ -195,7 +211,8 @@ Pakai `BUILD_bikin_exe.bat` (sudah memasang tkcalendar & pakai --hidden-import b
 ## Gotchas
 - Kerja dari salinan DBF; jangan tulis ke file live. Baca saat aplikasi aktif = aman
   (read-only) tapi idealnya saat sepi.
-- 329 baris bersatuan tak terdaftar di master = blind spot (tak bisa diverifikasi).
+- 329 baris bersatuan tak terdaftar di master: DULU blind spot; kini di-flag Detektor 2
+  sbg "SATUAN TAK DIKENAL" (satuannya jelas salah, walau harga pokok/koreksi belum tentu jelas).
 - DAMPAK_RL kasar; jangan jadi angka rugi.
 - Detektor satuan: HARGA JANGGAL itu campur (sebagian variasi harga wajar) -> cek manual.
 - Antivirus kadang salah-curiga pada .exe --onefile; jika kena, ganti ke `--onedir`.
