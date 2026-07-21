@@ -181,9 +181,10 @@ class App:
     HPP_OPTS = ["0.1%  (super teliti, semua selisih)", "30%  (lebih teliti, banyak noise)",
                 "50%  (disarankan)", "70%  (paling parah saja)", "90%  (hampir pasti bug)"]
     HPP_MAP = {"0.1": 0.001, "30": 0.30, "50": 0.50, "70": 0.70, "90": 0.90}
-    SAT_OPTS = ["0.1%  (super teliti, semua selisih)", "40%  (lebih teliti, banyak noise)",
+    # Satuan: lantai efektif 25% (guard match_tol), jadi <25% tak berguna -> mulai dari 25%.
+    SAT_OPTS = ["25%  (paling teliti)", "40%  (lebih teliti)",
                 "60%  (disarankan)", "80%  (paling parah saja)"]
-    SAT_MAP = {"0.1": 0.001, "40": 0.40, "60": 0.60, "80": 0.80}
+    SAT_MAP = {"25": 0.25, "40": 0.40, "60": 0.60, "80": 0.80}
 
     def _on_mode(self):
         m = self.mode_var.get()
